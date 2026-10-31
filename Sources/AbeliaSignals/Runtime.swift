@@ -48,10 +48,16 @@ public final class Runtime {
     // weak: the owner holds the runtime
     private weak var owner: (any Actor)?
 
-    public var schedule: ((@escaping () -> Void) -> Void)?
+    @exclusivity(unchecked) public var schedule: ((@escaping () -> Void) -> Void)?
 
     // owns effects created outside any effect or scope
     lazy var rootScope = EffectScope(runtime: self, detached: true)
+
+    // what effects and scopes point at instead of the runtime itself
+    let handle = RuntimeHandle()
+    // made once, not per batch. through the handle: it doesn't keep the runtime
+    // alive, and does nothing if the runtime is gone by the time it's called
+    private let scheduledFlush: () -> Void
 
     @exclusivity(unchecked) private var queued: [Effect?] = []
     @exclusivity(unchecked) private var queuedLength = 0
@@ -61,7 +67,11 @@ public final class Runtime {
     // used through run(), or stored by a RuntimeOwner
     public init(isolation: isolated (any Actor)? = #isolation) {
         retainedIsolation = isolation
+        scheduledFlush = { [handle] in handle.runtime?._withUnsafeGuaranteedRef { $0.flush() } }
+        handle.runtime = .passUnretained(self)
     }
+
+    deinit { handle.runtime = nil }
 
     @discardableResult
     public func run<R>(_ body: () throws -> R) rethrows -> R {
@@ -110,7 +120,7 @@ public final class Runtime {
         isFlushScheduled = true
 
         if let schedule {
-            schedule { [self] in flush() }
+            schedule(scheduledFlush)
         } else if let isolation {
             let runtime = TrustMe(value: self)
             isolation.assumeIsolated { isolation in
@@ -123,6 +133,13 @@ public final class Runtime {
             print("Runtime has no isolation and schedule is not set. call flush() to run effects")
         }
     }
+}
+
+// Effects and scopes don't keep their runtime alive, but a weak reference to
+// it would move its refcount to a side table, and every retain and release of
+// it onto the slow path. This box is cleared when the runtime is freed instead.
+final class RuntimeHandle {
+    @exclusivity(unchecked) var runtime: Unmanaged<Runtime>?
 }
 
 struct TrustMe<T>: @unchecked Sendable {

@@ -273,6 +273,7 @@ func scheduleIsCalledOncePerBatch() {
         a.value = 2
         #expect(scheduled.count == 1, "next batch schedules again")
     }
+    scheduled.removeAll()  // each holds the runtime, which holds `schedule`
 }
 
 @MainActor
@@ -430,14 +431,20 @@ func defaultRuntimeFlushesOnMainActor() async {
     #expect(log.count == 1, "no flush() or schedule needed")
 }
 
+final class Log {
+    var values: [Int] = []
+}
+
 actor Store: RuntimeOwner {
     let signalsRuntime = Runtime()
     let count = Signal(0)
-    var seen: [Int] = []
+    let log = Log()
     var observed: Computed<Int>?
 
+    var seen: [Int] { log.values }
+
     func start() {
-        effect { store in store.seen.append(store.count.value) }
+        effect { [count, log] in log.values.append(count.value) }
         observed = Computed.observing { 1 }
         _ = observed?.value
     }
@@ -460,4 +467,28 @@ func actorOwnsItsRuntime() async {
         #expect(await store.seen == [0, 1], "flushed on the store without any setup")
     }
     #expect(freed == nil, "the store, its runtime and its effects go together")
+}
+
+@Test
+func computedCanStopItsReaderMidCheck() {
+    withRuntime { runtime in
+        let a = Signal(0)
+        var reader: Effect?
+        let c = Computed { () -> Int in
+            let value = a.value
+            if value == 1 {
+                // unlinks every link the walk that's running this is standing on
+                reader?.stop()
+                reader = nil
+            }
+            return value
+        }
+        let mid = Computed { c.value + 1 }
+        reader = effect { _ = mid.value }
+
+        a.value = 1
+        runtime.flush()
+        #expect(reader == nil)
+        #expect(mid.peek == 2)
+    }
 }

@@ -7,9 +7,10 @@ public protocol Source<Value>: AnyObject {
 }
 
 public final class Signal<Value>: ReactiveNode, Source {
-    @usableFromInline var stored: Value
+    @exclusivity(unchecked) @usableFromInline var stored: Value
     @usableFromInline let isEqual: (Value, Value) -> Bool
 
+    @inlinable
     public init(_ value: Value, equals isEqual: @escaping (Value, Value) -> Bool) {
         stored = value
         self.isEqual = isEqual
@@ -17,6 +18,7 @@ public final class Signal<Value>: ReactiveNode, Source {
     }
 
     // without Equatable every write notifies
+    @inlinable
     public convenience init(_ value: Value) {
         self.init(value, equals: { _, _ in false })
     }
@@ -49,24 +51,67 @@ public final class Signal<Value>: ReactiveNode, Source {
 }
 
 extension Signal where Value: Equatable {
+    @inlinable
     public convenience init(_ value: Value) {
         self.init(value, equals: ==)
     }
 }
 
-// Lazy and cached. With no subscribers left it unlinks from its sources and
-// recomputes on the next read.
-public final class Computed<Value>: ReactiveNode, Source {
-    private let compute: () -> Value
-    private let isEqual: (Value, Value) -> Bool
-    @usableFromInline var cached: Value?
+// The non-generic half of Computed. `recompute` is built by Computed's
+// inlinable init, so it's specialized for the client's Value; a generic
+// update() here would run unspecialized.
+public class ComputedNode: ReactiveNode {
+    // stores the new value, returns whether it changed
+    @usableFromInline let recompute: (ComputedNode) -> Bool
 
-    public init(equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value) {
-        self.compute = compute
-        self.isEqual = isEqual
+    @usableFromInline init(recompute: @escaping (ComputedNode) -> Bool) {
+        self.recompute = recompute
         super.init(flags: [])
     }
 
+    final override func update() -> Bool {
+        if flags.contains(.hasChildEffect) { disposeChildEffects(self) }
+        depsTail = nil
+        flags = [.mutable, .recursedCheck]
+        let prevSub = swapActiveSub(self)
+        nextCycle()
+        let changed = recompute(self)
+        restoreActiveSub(prevSub)
+        flags.remove(.recursedCheck)
+        purgeDeps(self)
+        return changed
+    }
+
+    final override func unwatched() {
+        guard depsTail != nil else { return }
+        flags = [.mutable, .dirty]
+        disposeAllDepsInReverse(self)
+    }
+}
+
+// Lazy and cached. With no subscribers left it unlinks from its sources and
+// recomputes on the next read.
+public final class Computed<Value>: ComputedNode, Source {
+    @exclusivity(unchecked) @usableFromInline var cached: Value?
+    @usableFromInline let compute: () -> Value
+    @usableFromInline let isEqual: (Value, Value) -> Bool
+
+    // `recompute` captures nothing, so specialized it needs no context allocation
+    @inlinable
+    public init(equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value) {
+        self.compute = compute
+        self.isEqual = isEqual
+        super.init(recompute: { node in
+            let computed = unsafeDowncast(node, to: Computed<Value>.self)
+            let old = computed.cached
+            let new = computed.compute()
+            computed.cached = new
+            guard let old else { return true }
+            return !computed.isEqual(old, new)
+        })
+    }
+
+    @inlinable
     public convenience init(_ compute: @escaping () -> Value) {
         self.init(equals: { _, _ in false }, compute)
     }
@@ -81,42 +126,20 @@ public final class Computed<Value>: ReactiveNode, Source {
         return cached!
     }
 
-    override func update() -> Bool {
-        if flags.contains(.hasChildEffect) { disposeChildEffects(self) }
-        depsTail = nil
-        flags = [.mutable, .recursedCheck]
-        let prevSub = activeSub
-        activeSub = self
-        nextCycle()
-        let old = cached
-        let new = compute()
-        cached = new
-        activeSub = prevSub
-        flags.remove(.recursedCheck)
-        purgeDeps(self)
-        guard let old else { return true }
-        return !isEqual(old, new)
-    }
-
-    override func unwatched() {
-        guard depsTail != nil else { return }
-        flags = [.mutable, .dirty]
-        disposeAllDepsInReverse(self)
-    }
 }
 
 extension ReactiveNode {
     @usableFromInline func signalRead() {
         if flags.contains(.dirty) {
             flags = .mutable
-            if let subs = subsRef { shallowPropagate(subs) }
+            if let subs { shallowPropagate(subs) }
         }
         if let sub = activeSubRef { link(self, sub, cycle) }
     }
 
     @usableFromInline func signalWritten() {
         flags = [.mutable, .dirty]
-        if let subs = subsRef { propagate(subs, innerWrite: runDepth != 0) }
+        if let subs { propagate(subs, innerWrite: runDepth != 0) }
     }
 
     @usableFromInline func computedRead(tracked: Bool) {
@@ -124,16 +147,17 @@ extension ReactiveNode {
         if flags.isEmpty || !flags.isDisjoint(with: [.dirty, .pending]) {
             var dirty = flags.isEmpty || flags.contains(.dirty)
             if !dirty {
-                dirty = checkDirty(depsRef!, self)
+                dirty = checkDirty(deps!, self)
                 if !dirty { self.flags.remove(.pending) }
             }
-            if dirty, update(), let subs = subsRef { shallowPropagate(subs) }
+            if dirty, update(), let subs { shallowPropagate(subs) }
         }
         if tracked, let sub = activeSubRef { link(self, sub, cycle) }
     }
 }
 
 extension Computed where Value: Equatable {
+    @inlinable
     public convenience init(_ compute: @escaping () -> Value) {
         self.init(equals: ==, compute)
     }
@@ -142,13 +166,14 @@ extension Computed where Value: Equatable {
 // Owned by the effect, computed or scope it was created in, or by the runtime
 // outside any of them. Dropping the handle doesn't stop it.
 public final class Effect: ReactiveNode {
-    // weak: the runtime owns root effects. once it's gone this never re-runs
-    weak var runtime: Runtime?
+    // not the runtime: it owns root effects. once it's gone this never re-runs
+    let runtimeHandle: RuntimeHandle
+    var runtime: Runtime? { runtimeHandle.runtime?.takeUnretainedValue() }
     private let body: () -> Void
-    var cleanups: [() -> Void] = []
+    @exclusivity(unchecked) var cleanups: [() -> Void] = []
 
     init(runtime: Runtime, body: @escaping () -> Void) {
-        self.runtime = runtime
+        runtimeHandle = runtime.handle
         self.body = body
         super.init(flags: [.watching, .recursedCheck])
     }
@@ -162,7 +187,7 @@ public final class Effect: ReactiveNode {
 
     func run() {
         let flags = self.flags
-        if flags.contains(.dirty) || (flags.contains(.pending) && checkDirty(depsRef!, self)) {
+        if flags.contains(.dirty) || (flags.contains(.pending) && checkDirty(deps!, self)) {
             if flags.contains(.hasChildEffect) { disposeChildEffects(self) }
             if !cleanups.isEmpty {
                 runCleanups(&cleanups)
@@ -170,13 +195,12 @@ public final class Effect: ReactiveNode {
             }
             depsTail = nil
             self.flags = [.watching, .recursedCheck]
-            let prevSub = activeSub
-            activeSub = self
+            let prevSub = swapActiveSub(self)
             nextCycle()
             runDepth += 1
             body()
             runDepth -= 1
-            activeSub = prevSub
+            restoreActiveSub(prevSub)
             self.flags.remove(.recursedCheck)
             purgeDeps(self)
         } else if deps != nil {
@@ -211,20 +235,6 @@ public func effect(
     return effect
 }
 
-extension RuntimeOwner {
-    // `effect` for actor state. A body capturing `self` would keep the actor
-    // alive through its own runtime, and `[weak self]` loses the isolation, so
-    // this holds the actor weakly and passes it in isolated.
-    @discardableResult
-    public func effect(_ body: @escaping (isolated Self) -> Void) -> Effect {
-        // only ever called on self, which assumeIsolated checks
-        let body = TrustMe(value: body)
-        return AbeliaSignals.effect { [weak self] in
-            self?.assumeIsolated { body.value($0) }
-        }
-    }
-}
-
 // Inside an effect: runs before its next run and when it stops.
 // Inside `EffectScope.run`: runs when the scope stops.
 public func onCleanup(_ cleanup: @escaping () -> Void) {
@@ -245,9 +255,10 @@ public func untrack<R>(_ body: () throws -> R) rethrows -> R {
 
 // Like Vue's effectScope. Stops when deinitialized.
 public final class EffectScope: ReactiveNode {
-    // weak: the runtime owns rootScope
-    weak var runtime: Runtime?
-    var cleanups: [() -> Void] = []
+    // not the runtime: it owns rootScope
+    let runtimeHandle: RuntimeHandle
+    var runtime: Runtime? { runtimeHandle.runtime?.takeUnretainedValue() }
+    @exclusivity(unchecked) var cleanups: [() -> Void] = []
 
     // a non-detached scope is owned and stopped by the effect or scope active when it's created
     public convenience init(detached: Bool = false, isolation: isolated (any Actor)? = #isolation) {
@@ -259,7 +270,7 @@ public final class EffectScope: ReactiveNode {
     }
 
     init(runtime: Runtime, detached: Bool) {
-        self.runtime = runtime
+        runtimeHandle = runtime.handle
         super.init(flags: .mutable)
         if !detached, let parent = activeSub {
             link(self, .passUnretained(parent), 0)

@@ -101,10 +101,10 @@ actor Store: RuntimeOwner {
     let signalsRuntime = Runtime()
 
     let count = Signal(0)
-    var seen: [Int] = []
+    let doubled = Signal(0)
 
     func start() {
-        effect { store in store.seen.append(store.count.value) }
+        effect { [count, doubled] in doubled.value = count.value * 2 }
     }
 }
 ```
@@ -112,10 +112,18 @@ actor Store: RuntimeOwner {
 The actor owns the runtime, and the runtime owns the effects created on the actor, so
 all three are freed together.
 
-Inside an actor, use `self.effect { store in … }` instead of the free `effect` function.
-A body that captures `self` keeps the actor alive through its own runtime, and
-`[weak self]` makes the closure nonisolated. `self.effect` holds the actor weakly and
-passes it in isolated.
+Effect bodies on an actor should capture what they use, not `self`:
+
+- `effect { [count, doubled] in … }` holds only those signals. It still runs on the
+  actor, since that's where its runtime flushes.
+- `effect { count.value }` means `self.count.value`, so it captures `self` strongly.
+  The actor then keeps itself alive through its own runtime and is never freed,
+  unless you stop the effect.
+- `effect { [weak self] in … }` loses the actor's isolation, so actor state can't be
+  touched from it.
+
+So keep the state an effect needs in signals, or in other objects, and list them in
+the capture list.
 
 ### Custom event loops and manual flushing
 

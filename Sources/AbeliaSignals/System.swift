@@ -1,19 +1,19 @@
 // Port of alien-signals' system.ts (MIT, see LICENSE).
 import CAbeliaSignals
 
-struct ReactiveFlags: OptionSet {
-    var rawValue: UInt8
+@usableFromInline @frozen struct ReactiveFlags: OptionSet, Sendable {
+    @usableFromInline var rawValue: UInt8
 
-    init(rawValue: UInt8) { self.rawValue = rawValue }
+    @inlinable init(rawValue: UInt8) { self.rawValue = rawValue }
 
-    static let mutable = Self(rawValue: 1)
-    static let watching = Self(rawValue: 2)
-    static let recursedCheck = Self(rawValue: 4)
-    static let recursed = Self(rawValue: 8)
-    static let dirty = Self(rawValue: 16)
-    static let pending = Self(rawValue: 32)
+    @inlinable static var mutable: Self { Self(rawValue: 1) }
+    @inlinable static var watching: Self { Self(rawValue: 2) }
+    @inlinable static var recursedCheck: Self { Self(rawValue: 4) }
+    @inlinable static var recursed: Self { Self(rawValue: 8) }
+    @inlinable static var dirty: Self { Self(rawValue: 16) }
+    @inlinable static var pending: Self { Self(rawValue: 32) }
     // an effect or scope among the deps; they're disposed before a re-run
-    static let hasChildEffect = Self(rawValue: 64)
+    @inlinable static var hasChildEffect: Self { Self(rawValue: 64) }
 }
 
 var activeSub: ReactiveNode? {
@@ -26,6 +26,17 @@ var activeSubRef: NodeRef? {
     csignals_get_active_sub().map { NodeRef.fromOpaque($0) }
 }
 
+// set and restore without retaining, around a run
+func swapActiveSub(_ sub: ReactiveNode) -> UnsafeMutableRawPointer? {
+    let prev = csignals_get_active_sub()
+    csignals_set_active_sub(Unmanaged.passUnretained(sub).toOpaque())
+    return prev
+}
+
+func restoreActiveSub(_ prev: UnsafeMutableRawPointer?) {
+    csignals_set_active_sub(prev)
+}
+
 var cycle: UInt64 { csignals_get_cycle() }
 
 func nextCycle() { _ = csignals_next_cycle() }
@@ -35,29 +46,33 @@ var runDepth: UInt32 {
     set { csignals_set_run_depth(newValue) }
 }
 
-// A sub owns its dep links, and through them its deps. Everything else
-// points unowned(unsafe); a link is removed from both lists before release.
+// A sub owns its dep links, and through them its deps. Graph pointers are
+// stored Unmanaged so walking the graph never retains: each link is retained
+// once when it's inserted and released by unlink, after it's removed from both
+// lists, or later if a checkDirty walk is in progress (see releaseLink). Only
+// Link.dep is a real strong reference.
 // Graph fields skip dynamic exclusivity checks: only this module touches them,
 // never with overlapping accesses.
 public class ReactiveNode {
     @exclusivity(unchecked) var flags: ReactiveFlags
-    @exclusivity(unchecked) var deps: Link?
-    @exclusivity(unchecked) unowned(unsafe) var depsTail: Link?
-    @exclusivity(unchecked) unowned(unsafe) var subs: Link?
-    @exclusivity(unchecked) unowned(unsafe) var subsTail: Link?
+    @exclusivity(unchecked) var deps: LinkRef?
+    @exclusivity(unchecked) var depsTail: LinkRef?
+    @exclusivity(unchecked) var subs: LinkRef?
+    @exclusivity(unchecked) var subsTail: LinkRef?
 
-    init(flags: ReactiveFlags) {
+    @usableFromInline init(flags: ReactiveFlags) {
         self.flags = flags
     }
 
-    deinit { disposeAllDepsInReverse(self) }
+    // past depsTail first: a node freed mid-run has links depsTail doesn't reach
+    deinit {
+        purgeDeps(self)
+        disposeAllDepsInReverse(self)
+    }
 
     func update() -> Bool { false }
 
     func unwatched() {}
-
-    final var subsRef: LinkRef? { subs.map { .passUnretained($0) } }
-    final var depsRef: LinkRef? { deps.map { .passUnretained($0) } }
 
     var subscriberCount: Int {
         var count = 0
@@ -73,15 +88,17 @@ public class ReactiveNode {
 final class Link {
     @exclusivity(unchecked) var version: UInt64
     let dep: ReactiveNode
-    unowned(unsafe) let sub: ReactiveNode
-    @exclusivity(unchecked) var nextDep: Link?
-    @exclusivity(unchecked) unowned(unsafe) var prevDep: Link?
-    @exclusivity(unchecked) unowned(unsafe) var prevSub: Link?
-    @exclusivity(unchecked) unowned(unsafe) var nextSub: Link?
+    let sub: NodeRef
+    @exclusivity(unchecked) var prevDep: LinkRef?
+    @exclusivity(unchecked) var nextDep: LinkRef?
+    @exclusivity(unchecked) var prevSub: LinkRef?
+    @exclusivity(unchecked) var nextSub: LinkRef?
+    // the deferred-release list, see releaseLink
+    @exclusivity(unchecked) var nextDeferred: LinkRef?
 
     init(
-        version: UInt64, dep: ReactiveNode, sub: ReactiveNode, prevDep: Link?, nextDep: Link?,
-        prevSub: Link?
+        version: UInt64, dep: ReactiveNode, sub: NodeRef, prevDep: LinkRef?, nextDep: LinkRef?,
+        prevSub: LinkRef?
     ) {
         self.version = version
         self.dep = dep
@@ -92,17 +109,28 @@ final class Link {
     }
 }
 
-// The hot paths below walk the graph through Unmanaged refs so traversal
-// doesn't retain. Nodes and links stay alive while they're linked.
 typealias LinkRef = Unmanaged<Link>
 typealias NodeRef = Unmanaged<ReactiveNode>
 
 extension Unmanaged where Instance == Link {
     var dep: NodeRef { _withUnsafeGuaranteedRef { .passUnretained($0.dep) } }
-    var sub: NodeRef { _withUnsafeGuaranteedRef { .passUnretained($0.sub) } }
-    var nextDep: LinkRef? { _withUnsafeGuaranteedRef { $0.nextDep.map { .passUnretained($0) } } }
-    var prevDep: LinkRef? { _withUnsafeGuaranteedRef { $0.prevDep.map { .passUnretained($0) } } }
-    var nextSub: LinkRef? { _withUnsafeGuaranteedRef { $0.nextSub.map { .passUnretained($0) } } }
+    var sub: NodeRef { _withUnsafeGuaranteedRef { $0.sub } }
+    var nextDep: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.nextDep } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.nextDep = newValue } }
+    }
+    var prevDep: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.prevDep } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.prevDep = newValue } }
+    }
+    var nextSub: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.nextSub } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.nextSub = newValue } }
+    }
+    var prevSub: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.prevSub } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.prevSub = newValue } }
+    }
     var version: UInt64 {
         get { _withUnsafeGuaranteedRef { $0.version } }
         nonmutating set { _withUnsafeGuaranteedRef { $0.version = newValue } }
@@ -115,15 +143,24 @@ extension Unmanaged where Instance == ReactiveNode {
         get { _withUnsafeGuaranteedRef { $0.flags } }
         nonmutating set { _withUnsafeGuaranteedRef { $0.flags = newValue } }
     }
-    var deps: LinkRef? { _withUnsafeGuaranteedRef { $0.deps.map { .passUnretained($0) } } }
-    var subs: LinkRef? { _withUnsafeGuaranteedRef { $0.subs.map { .passUnretained($0) } } }
+    var deps: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.deps } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.deps = newValue } }
+    }
     var depsTail: LinkRef? {
-        get { _withUnsafeGuaranteedRef { $0.depsTail.map { .passUnretained($0) } } }
-        nonmutating set {
-            _withUnsafeGuaranteedRef { $0.depsTail = newValue?.takeUnretainedValue() }
-        }
+        get { _withUnsafeGuaranteedRef { $0.depsTail } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.depsTail = newValue } }
+    }
+    var subs: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.subs } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.subs = newValue } }
+    }
+    var subsTail: LinkRef? {
+        get { _withUnsafeGuaranteedRef { $0.subsTail } }
+        nonmutating set { _withUnsafeGuaranteedRef { $0.subsTail = newValue } }
     }
     func update() -> Bool { _withUnsafeGuaranteedRef { $0.update() } }
+    func unwatched() { _withUnsafeGuaranteedRef { $0.unwatched() } }
     static func === (a: Self, b: Self) -> Bool { a.toOpaque() == b.toOpaque() }
 }
 
@@ -139,33 +176,24 @@ func link(_ dep: ReactiveNode, _ sub: NodeRef, _ version: UInt64) {
         return
     }
 
-    let prevSub = dep.subsTail.map { LinkRef.passUnretained($0) }
+    let prevSub = depRef.subsTail
     if let prevSub, prevSub.version == version, prevSub.sub === sub { return }
 
-    sub._withUnsafeGuaranteedRef { sub in
-        let newLink = Link(
-            version: version, dep: dep, sub: sub,
-            prevDep: prevDep?.takeUnretainedValue(), nextDep: nextDep?.takeUnretainedValue(),
-            prevSub: prevSub?.takeUnretainedValue())
-        sub.depsTail = newLink
-        dep.subsTail = newLink
-        nextDep?._withUnsafeGuaranteedRef { $0.prevDep = newLink }
-        if let prevDep {
-            prevDep._withUnsafeGuaranteedRef { $0.nextDep = newLink }
-        } else {
-            sub.deps = newLink
-        }
-        if let prevSub {
-            prevSub._withUnsafeGuaranteedRef { $0.nextSub = newLink }
-        } else {
-            dep.subs = newLink
-        }
-    }
+    // the +1 held by sub's dep list
+    let newLink = LinkRef.passRetained(
+        Link(
+            version: version, dep: dep, sub: sub, prevDep: prevDep, nextDep: nextDep,
+            prevSub: prevSub))
+    sub.depsTail = newLink
+    depRef.subsTail = newLink
+    nextDep?.prevDep = newLink
+    if let prevDep { prevDep.nextDep = newLink } else { sub.deps = newLink }
+    if let prevSub { prevSub.nextSub = newLink } else { depRef.subs = newLink }
 }
 
-// caller keeps `link` alive
+// removes `link` from both lists, then releases it, which can free its dep
 @discardableResult
-func unlink(_ link: Link, _ sub: ReactiveNode) -> Link? {
+func unlink(_ link: LinkRef, _ sub: NodeRef) -> LinkRef? {
     let dep = link.dep
     let prevDep = link.prevDep
     let nextDep = link.nextDep
@@ -179,127 +207,182 @@ func unlink(_ link: Link, _ sub: ReactiveNode) -> Link? {
         prevSub.nextSub = nextSub
     } else {
         dep.subs = nextSub
+        // dep is still held by the link
         if nextSub == nil { dep.unwatched() }
     }
+    releaseLink(link)
     return nextDep
 }
 
-func propagate(_ start: LinkRef, innerWrite: Bool) {
-    var link = start
-    var next = link.nextSub
-    var stack: [LinkRef?] = []
-
-    top: while true {
-        let sub = link.sub
-        var flags = sub.flags
-
-        if flags.isDisjoint(with: [.recursedCheck, .recursed, .dirty, .pending]) {
-            sub.flags = flags.union(innerWrite ? [.pending, .recursed] : .pending)
-        } else if flags.isDisjoint(with: [.recursedCheck, .recursed]) {
-            flags = []
-        } else if !flags.contains(.recursedCheck) {
-            sub.flags = flags.subtracting(.recursed).union(.pending)
-        } else if flags.isDisjoint(with: [.dirty, .pending]) && isValidLink(link, sub) {
-            sub.flags = flags.union([.recursed, .pending])
-            flags.formIntersection(.mutable)
-        } else {
-            flags = []
+// checkDirty runs computeds, which are user code that can unlink what the walk
+// is on. Rather than retaining every step, links unlinked during a walk are
+// freed once the outermost walk ends, so whatever it reaches stays valid.
+private func releaseLink(_ link: LinkRef) {
+    if csignals_get_walk_depth() == 0 {
+        link.release()
+    } else {
+        link._withUnsafeGuaranteedRef {
+            $0.nextDeferred = csignals_get_deferred_links().map { LinkRef.fromOpaque($0) }
         }
-
-        if flags.contains(.watching) { notify(sub) }
-
-        if flags.contains(.mutable), let subSubs = sub.subs {
-            link = subSubs
-            if let nextSub = subSubs.nextSub {
-                stack.append(next)
-                next = nextSub
-            }
-            continue
-        }
-
-        if let n = next {
-            link = n
-            next = n.nextSub
-            continue
-        }
-
-        while let saved = stack.popLast() {
-            if let saved {
-                link = saved
-                next = saved.nextSub
-                continue top
-            }
-        }
-
-        break
+        csignals_set_deferred_links(link.toOpaque())
     }
 }
 
-// update() runs user code that can unlink and free nodes on the walk, so the
-// stack and anything used across an update() are held strongly
-func checkDirty(_ start: LinkRef, _ startSub: ReactiveNode) -> Bool {
-    var link = start
-    var sub = NodeRef.passUnretained(startSub)
-    var stack: [Link] = []
-    var checkDepth = 0
-    var dirty = false
+private func releaseDeferredLinks() {
+    while let next = csignals_get_deferred_links() {
+        let link = LinkRef.fromOpaque(next)
+        csignals_set_deferred_links(link._withUnsafeGuaranteedRef { $0.nextDeferred?.toOpaque() })
+        link.release()
+    }
+}
 
-    top: while true {
-        let dep = link.dep
-        let flags = dep.flags
+// A stack in the caller's frame up to `buffer.count` entries, spilling to the
+// heap past that. The walks below are rarely that deep, so rarely allocate.
+struct ScratchStack<Element> {
+    let buffer: UnsafeMutableBufferPointer<Element>
+    var count = 0
+    var spill: [Element] = []
 
-        if sub.flags.contains(.dirty) {
-            dirty = true
-        } else if flags.intersection([.mutable, .dirty]) == [.mutable, .dirty] {
-            let subs = dep.subs!
-            let changed = withExtendedLifetime(
-                (link.takeUnretainedValue(), subs.takeUnretainedValue())
-            ) {
-                dep.update()
-            }
-            if changed {
-                if subs.nextSub != nil { shallowPropagate(subs) }
-                dirty = true
-            }
-        } else if flags.intersection([.mutable, .pending]) == [.mutable, .pending] {
-            stack.append(link.takeUnretainedValue())
-            link = dep.deps!
-            sub = dep
-            checkDepth += 1
-            continue
+    init(_ buffer: UnsafeMutableBufferPointer<Element>) { self.buffer = buffer }
+
+    mutating func push(_ element: Element) {
+        if count < buffer.count {
+            (buffer.baseAddress! + count).initialize(to: element)
+        } else {
+            spill.append(element)
         }
+        count += 1
+    }
 
-        if !dirty, let nextDep = link.nextDep {
-            link = nextDep
-            continue
-        }
+    mutating func pop() -> Element? {
+        if count == 0 { return nil }
+        count -= 1
+        return count < buffer.count ? (buffer.baseAddress! + count).move() : spill.removeLast()
+    }
+}
 
-        while checkDepth > 0 {
-            checkDepth -= 1
-            let popped = stack.removeLast()
-            link = .passUnretained(popped)
-            if dirty {
-                let subs = sub.subs!
-                let changed = withExtendedLifetime((popped, subs.takeUnretainedValue())) {
-                    sub.update()
-                }
-                if changed {
-                    if subs.nextSub != nil { shallowPropagate(subs) }
-                    sub = link.sub
-                    continue
-                }
-                dirty = false
+// 120 refs fit in the 1KB withUnsafeTemporaryAllocation keeps on the stack
+let scratchCapacity = 120
+
+func propagate(_ start: LinkRef, innerWrite: Bool) {
+    withUnsafeTemporaryAllocation(of: LinkRef?.self, capacity: scratchCapacity) { buffer in
+        var stack = ScratchStack(buffer)
+        var link = start
+        var next = link.nextSub
+
+        top: while true {
+            let sub = link.sub
+            var flags = sub.flags
+
+            if flags.isDisjoint(with: [.recursedCheck, .recursed, .dirty, .pending]) {
+                sub.flags = flags.union(innerWrite ? [.pending, .recursed] : .pending)
+            } else if flags.isDisjoint(with: [.recursedCheck, .recursed]) {
+                flags = []
+            } else if !flags.contains(.recursedCheck) {
+                sub.flags = flags.subtracting(.recursed).union(.pending)
+            } else if flags.isDisjoint(with: [.dirty, .pending]) && isValidLink(link, sub) {
+                sub.flags = flags.union([.recursed, .pending])
+                flags.formIntersection(.mutable)
             } else {
-                sub.flags.remove(.pending)
+                flags = []
             }
-            sub = link.sub
-            if let nextDep = link.nextDep {
-                link = nextDep
-                continue top
-            }
-        }
 
-        return dirty && !sub.flags.isEmpty
+            if flags.contains(.watching) { notify(sub) }
+
+            if flags.contains(.mutable), let subSubs = sub.subs {
+                link = subSubs
+                if let nextSub = subSubs.nextSub {
+                    stack.push(next)
+                    next = nextSub
+                }
+                continue
+            }
+
+            if let n = next {
+                link = n
+                next = n.nextSub
+                continue
+            }
+
+            while let saved = stack.pop() {
+                if let saved {
+                    link = saved
+                    next = saved.nextSub
+                    continue top
+                }
+            }
+
+            break
+        }
+    }
+}
+
+// update() runs user code that can unlink nodes on the walk; links stay valid
+// until the outermost walk ends (see releaseLink)
+func checkDirty(_ start: LinkRef, _ startSub: ReactiveNode) -> Bool {
+    let depth = csignals_get_walk_depth()
+    csignals_set_walk_depth(depth + 1)
+    let dirty = walkDirty(start, startSub)
+    csignals_set_walk_depth(depth)
+    if depth == 0, csignals_get_deferred_links() != nil { releaseDeferredLinks() }
+    return dirty
+}
+
+private func walkDirty(_ start: LinkRef, _ startSub: ReactiveNode) -> Bool {
+    withUnsafeTemporaryAllocation(of: LinkRef.self, capacity: scratchCapacity) { buffer in
+        var stack = ScratchStack(buffer)
+        var link = start
+        var sub = NodeRef.passUnretained(startSub)
+        var checkDepth = 0
+        var dirty = false
+
+        top: while true {
+            let dep = link.dep
+            let flags = dep.flags
+
+            if sub.flags.contains(.dirty) {
+                dirty = true
+            } else if flags.intersection([.mutable, .dirty]) == [.mutable, .dirty] {
+                if dep.update() {
+                    // read after: update() may have changed them
+                    if let subs = dep.subs, subs.nextSub != nil { shallowPropagate(subs) }
+                    dirty = true
+                }
+            } else if flags.intersection([.mutable, .pending]) == [.mutable, .pending] {
+                stack.push(link)
+                link = dep.deps!
+                sub = dep
+                checkDepth += 1
+                continue
+            }
+
+            if !dirty, let nextDep = link.nextDep {
+                link = nextDep
+                continue
+            }
+
+            while checkDepth > 0 {
+                checkDepth -= 1
+                link = stack.pop()!
+                if dirty {
+                    if sub.update() {
+                        if let subs = sub.subs, subs.nextSub != nil { shallowPropagate(subs) }
+                        sub = link.sub
+                        continue
+                    }
+                    dirty = false
+                } else {
+                    sub.flags.remove(.pending)
+                }
+                sub = link.sub
+                if let nextDep = link.nextDep {
+                    link = nextDep
+                    continue top
+                }
+            }
+
+            return dirty && !sub.flags.isEmpty
+        }
     }
 }
 
@@ -328,11 +411,12 @@ private func isValidLink(_ checkLink: LinkRef, _ sub: NodeRef) -> Bool {
 private func notify(_ effect: NodeRef) {
     effect._withUnsafeGuaranteedRef {
         let effect = unsafeDowncast($0, to: Effect.self)
-        effect.runtime?.enqueue(effect)
+        effect.runtimeHandle.runtime?._withUnsafeGuaranteedRef { $0.enqueue(effect) }
     }
 }
 
 func purgeDeps(_ sub: ReactiveNode) {
+    let sub = NodeRef.passUnretained(sub)
     var link = sub.depsTail != nil ? sub.depsTail!.nextDep : sub.deps
     while let l = link {
         link = unlink(l, sub)
@@ -340,6 +424,7 @@ func purgeDeps(_ sub: ReactiveNode) {
 }
 
 func disposeAllDepsInReverse(_ sub: ReactiveNode) {
+    let sub = NodeRef.passUnretained(sub)
     var link = sub.depsTail
     while let l = link {
         link = l.prevDep
@@ -348,9 +433,11 @@ func disposeAllDepsInReverse(_ sub: ReactiveNode) {
 }
 
 func disposeChildEffects(_ sub: ReactiveNode) {
+    let sub = NodeRef.passUnretained(sub)
     var link = sub.depsTail
     while let l = link {
         link = l.prevDep
-        if l.dep is Effect || l.dep is EffectScope { unlink(l, sub) }
+        let dep = l.dep.takeUnretainedValue()
+        if dep is Effect || dep is EffectScope { unlink(l, sub) }
     }
 }

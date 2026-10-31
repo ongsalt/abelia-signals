@@ -59,7 +59,7 @@ private final class ObservationTracker: @unchecked Sendable {
     fileprivate func invalidate() {
         guard let node, !node.flags.isEmpty, !node.flags.contains(.dirty) else { return }
         node.flags.insert(.dirty)
-        if let subs = node.subsRef { propagate(subs, innerWrite: runDepth != 0) }
+        if let subs = node.subs { propagate(subs, innerWrite: runDepth != 0) }
     }
 }
 
