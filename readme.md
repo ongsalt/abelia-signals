@@ -59,6 +59,30 @@ untrack { name.value }                  // reads in here don't subscribe
 - A computed nobody watches lets go of its sources and recomputes on its next read.
 - Effects created inside an effect are stopped before the parent re-runs.
 
+### Property wrappers
+
+`Signal` and `Computed` are also property wrappers:
+
+```swift
+final class Cart {
+    @Signal var count = 0            // same rules: Equatable values skip equal writes
+    @Computed var total: Double      // read-only, so it's set up in init
+
+    init(price: Double) {
+        _total = Computed { [count = _count] in Double(count.value) * price }
+    }
+}
+
+cart.count += 1                      // writes the signal
+cart.total                           // reads the computed, tracked
+cart.$count                          // the Signal itself
+```
+
+Capture signals in computeds and effects, not `self`, or the object keeps itself alive
+through its own nodes. Inside `init` that means the backing `_count`, since `$count`
+counts as a use of `self` until every property is set. Outside `init`, `$count` is fine:
+`effect { [count = cart.$count] in … }`.
+
 ### Scopes
 
 ```swift
@@ -176,6 +200,19 @@ There's no garbage collector, so ownership is explicit:
 | In-place mutation | `arr.push(x)` doesn't notify | `s.value.append(x)` notifies |
 | Syntax | `s()` / `s(v)` | `s.value` / `s.peek` |
 | Cleanup | Return a function, or `onCleanup` | `onCleanup { }` |
+
+## Benchmarks
+
+`Benchmarks/` is a separate package that runs the same cases here and on alien-signals
+in bun and node (whichever are installed), and prints ns/op side by side:
+
+```sh
+./Benchmarks/run.sh
+```
+
+Pass a case name to the binary to run only that one, e.g. for profiling:
+`Benchmarks/.build/release/Benchmarks "propagate 10x10"`. Power and thermal state move
+the numbers a lot on laptops, so only compare runs from the same session.
 
 ## License
 

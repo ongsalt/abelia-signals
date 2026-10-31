@@ -8,3 +8,7 @@ DerivedData/
 .netrc
 
 .sourcekit-lsp/
+
+/Benchmarks/.build
+/Benchmarks/.results
+/Benchmarks/js/node_modules

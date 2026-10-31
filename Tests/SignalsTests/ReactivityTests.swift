@@ -492,3 +492,58 @@ func computedCanStopItsReaderMidCheck() {
         #expect(mid.peek == 2)
     }
 }
+
+struct Opaque {
+    var id = 0
+}
+
+final class WrappedModel {
+    @Signal var count = 0
+    @Signal var opaque = Opaque()
+    @Computed var doubled: Int
+
+    init() {
+        _doubled = Computed { [count = _count] in count.value * 2 }
+    }
+}
+
+@Test
+func propertyWrappers() {
+    withRuntime { runtime in
+        let model = WrappedModel()
+        var seen: [Int] = []
+        effect { seen.append(model.doubled) }
+
+        model.count = 1
+        runtime.flush()
+        model.count = 1
+        runtime.flush()
+        #expect(seen == [0, 2], "an equal write doesn't notify")
+
+        model.count += 1
+        runtime.flush()
+        #expect(seen == [0, 2, 4])
+        #expect(model.$count.peek == 2)
+        #expect(model.$doubled.peek == 4)
+
+        var opaqueRuns = 0
+        effect {
+            _ = model.opaque
+            opaqueRuns += 1
+        }
+        model.opaque = Opaque()
+        runtime.flush()
+        #expect(opaqueRuns == 2, "not Equatable: every write notifies")
+    }
+}
+
+@Test
+func wrappedComputedDoesNotRetainItsObject() {
+    weak var freed: WrappedModel?
+    do {
+        let model = WrappedModel()
+        freed = model
+        #expect(model.doubled == 0)
+    }
+    #expect(freed == nil)
+}

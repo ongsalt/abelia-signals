@@ -1,0 +1,8 @@
+{
+  "name": "abelia-signals-benchmarks",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "alien-signals": "3.2.1"
+  }
+}

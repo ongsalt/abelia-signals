@@ -6,6 +6,9 @@ public protocol Source<Value>: AnyObject {
     var value: Value { get }
 }
 
+// Also a property wrapper: `@Signal var count = 0` reads and writes the signal,
+// and `$count` is the Signal itself, to capture in effects instead of `self`.
+@propertyWrapper
 public final class Signal<Value>: ReactiveNode, Source {
     @exclusivity(unchecked) @usableFromInline var stored: Value
     @usableFromInline let isEqual: (Value, Value) -> Bool
@@ -44,6 +47,24 @@ public final class Signal<Value>: ReactiveNode, Source {
 
     @inlinable public var peek: Value { stored }
 
+    @inlinable
+    public convenience init(wrappedValue: Value, equals isEqual: @escaping (Value, Value) -> Bool) {
+        self.init(wrappedValue, equals: isEqual)
+    }
+
+    @inlinable
+    public convenience init(wrappedValue: Value) {
+        self.init(wrappedValue)
+    }
+
+    @inlinable public var wrappedValue: Value {
+        get { value }
+        set { value = newValue }
+        _modify { yield &value }
+    }
+
+    @inlinable public var projectedValue: Signal<Value> { self }
+
     override func update() -> Bool {
         flags = .mutable
         return true
@@ -54,6 +75,11 @@ extension Signal where Value: Equatable {
     @inlinable
     public convenience init(_ value: Value) {
         self.init(value, equals: ==)
+    }
+
+    @inlinable
+    public convenience init(wrappedValue: Value) {
+        self.init(wrappedValue, equals: ==)
     }
 }
 
@@ -91,6 +117,13 @@ public class ComputedNode: ReactiveNode {
 
 // Lazy and cached. With no subscribers left it unlinks from its sources and
 // recomputes on the next read.
+//
+// Also a read-only property wrapper, set up in init since it has no initial
+// value. Capture signals, not `self`, or the object keeps itself alive. In
+// init that's the backing `_count`: `$count` still counts as using self:
+//     @Computed var doubled: Int
+//     init() { _doubled = Computed { [count = _count] in count.value * 2 } }
+@propertyWrapper
 public final class Computed<Value>: ComputedNode, Source {
     @exclusivity(unchecked) @usableFromInline var cached: Value?
     @usableFromInline let compute: () -> Value
@@ -126,6 +159,9 @@ public final class Computed<Value>: ComputedNode, Source {
         return cached!
     }
 
+    @inlinable public var wrappedValue: Value { value }
+
+    @inlinable public var projectedValue: Computed<Value> { self }
 }
 
 extension ReactiveNode {
