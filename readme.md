@@ -4,26 +4,20 @@ Fine-grained reactivity for Swift: signals, lazy computeds and batched effects.
 The algorithm is ported from [alien-signals](https://github.com/stackblitz/alien-signals).
 
 ```swift
-@MainActor final class App {
-    let runtime: Runtime
+@MainActor func setup() {
     let count = Signal(0)
+    let doubled = Computed { count.value * 2 }
 
-    init() { runtime = Runtime() }   // flushes on the main actor, where it's created
+    effect { print("count", count.value, "doubled", doubled.value) }   // prints now
 
-    func setup() {
-        let doubled = Computed { [count] in count.value * 2 }
-        runtime.run {
-            effect { [count] in print("count", count.value, "doubled", doubled.value) }   // prints now
-        }
-        count.value = 1
-        count.value = 2   // both writes land in one re-run, on the next main actor turn
-    }
+    count.value = 1
+    count.value = 2   // both writes land in one re-run, on the next main actor turn
 }
 ```
 
 ## Installation
 
-Requires Swift 6.4.
+Requires Swift 6.4. probably break on newer versions becuase of Builtin usages. 
 
 ```swift
 .package(url: "https://github.com/ongsalt/abelia-signals.git", branch: "main")
@@ -112,65 +106,47 @@ let title = Computed.observing { model.title }   // invalidated when model.title
 Changes made on the computed's actor invalidate it synchronously. Changes from other
 threads hop onto that actor first.
 
-## Runtimes
+## Schedulers
 
-Effects never re-run synchronously on write. They're queued, and a `Runtime` flushes
-them in one batch, on the actor it was created on. Effects, scopes and observing
-computeds are created inside `runtime.run { }`, which binds `Runtime.current`; outside
-of it they trap. It's a task-local, so it reaches any depth of synchronous code inside
-`run`, isolated or not. Effects created inside an effect or scope use its runtime
-without another `run`. Signals and computeds don't need a runtime.
+Effects never re-run synchronously on write. They're queued, and an `EffectScheduler`
+flushes them in one batch. There's one per serial executor: effects, scopes and observing
+computeds use the scheduler of the executor running the code that creates them, however
+deep in synchronous code, isolated or not. Effects created inside an effect or scope use
+its scheduler. Signals and computeds don't need one.
 
 ### On the main actor
 
-Create the runtime on the main actor and keep it, e.g. on the object that owns the
-effects. Effects don't keep their runtime alive. Create it in `init`, not in a
-property initializer: those aren't isolated, so it would get no actor to flush on.
-
-```swift
-@MainActor final class ViewModel {
-    let runtime: Runtime
-    let count = Signal(0)
-
-    init() { runtime = Runtime() }
-
-    func start() {
-        runtime.run {
-            effect { [count] in print(count.value) }
-        }
-    }
-}
-```
+Nothing to set up. Main actor code, including main-thread callbacks that aren't in a
+task, uses `EffectScheduler.main`, which flushes on the next main actor turn.
 
 ### On your own actor
 
-Store a runtime and create the actor's effects inside `run`:
+Conform to `EffectSchedulerOwner`:
 
 ```swift
-actor Store {
-    lazy var runtime = Runtime(owner: self)   // doesn't keep the actor alive
+actor Store: EffectSchedulerOwner {
+    lazy var effectScheduler = EffectScheduler(owner: self)   // doesn't keep the actor alive
 
     let count = Signal(0)
     let doubled = Signal(0)
 
     func start() {
-        runtime.run {
-            effect { [count, doubled] in doubled.value = count.value * 2 }
-        }
+        effect { [count, doubled] in doubled.value = count.value * 2 }
     }
 }
 ```
 
-The actor owns the runtime, and the runtime owns the effects created in `run`, so all
-three are freed together. Effects created inside those effects use the same runtime
-without another `run`.
+The actor owns the scheduler, and the scheduler owns the effects created on the actor,
+so all three are freed together. Creating an effect on an actor that doesn't conform
+traps. This only works for actors on their default executor: one with a custom executor
+needs `scheduler.run { }` (below).
 
 Effect bodies on an actor should capture what they use, not `self`:
 
 - `effect { [count, doubled] in … }` holds only those signals. It still runs on the
-  actor, since that's where its runtime flushes.
+  actor, since that's where its scheduler flushes.
 - `effect { count.value }` means `self.count.value`, so it captures `self` strongly.
-  The actor then keeps itself alive through its own runtime and is never freed,
+  The actor then keeps itself alive through its own scheduler and is never freed,
   unless you stop the effect.
 - `effect { [weak self] in … }` loses the actor's isolation, so actor state can't be
   touched from it.
@@ -183,33 +159,34 @@ the capture list.
 Set `schedule` to hand flushes to another loop:
 
 ```swift
-let runtime = Runtime()
-runtime.schedule = { flush in myLoop.post(flush) }
+let scheduler = EffectScheduler()
+scheduler.schedule = { flush in myLoop.post(flush) }
 ```
 
 `schedule` is called in the middle of a write, so it must not call `flush` synchronously.
 
-Code that isn't on any actor needs a runtime bound explicitly, and has to flush it:
+Code with no serial executor (a plain thread, nonisolated async code) or on a custom
+executor binds a scheduler explicitly, and may have to flush it:
 
 ```swift
-let runtime = Runtime()          // keep this alive: effects don't
-runtime.schedule = { _ in }      // silences the "call flush()" warning
-runtime.run {
-    effect { … }                 // effects created in here use this runtime
+let scheduler = EffectScheduler()   // keep this alive: effects don't
+scheduler.schedule = { _ in }       // silences the "call flush()" warning
+scheduler.run {
+    effect { … }                    // effects created in here use this scheduler
 }
-runtime.flush()
+scheduler.flush()
 ```
 
-That's also how tests get a runtime each.
+`run` takes priority over the executor's scheduler, which is also how tests get one each.
 
 ## Lifetimes
 
 There's no garbage collector, so ownership is explicit:
 
-- A runtime owns its top-level effects and stops them when it's freed. Effects and
-  scopes don't keep their runtime alive.
+- A scheduler owns its top-level effects and stops them when it's freed. Effects and
+  scopes don't keep their scheduler alive.
 - Dropping an `Effect` handle doesn't stop it. Call `stop()`, or let its owner
-  (parent effect, scope or runtime) stop it.
+  (parent effect, scope or scheduler) stop it.
 - Effect bodies and `onCleanup` closures hold whatever they capture until the effect stops.
 - A signal never keeps its subscribers alive.
 
@@ -218,7 +195,7 @@ There's no garbage collector, so ownership is explicit:
 | | JS (alien-signals, Preact, Solid) | AbeliaSignals |
 |---|---|---|
 | Effect re-runs | Synchronous after a write, unless in a `batch` | Always batched into a flush. Only the first run is synchronous |
-| Threads | One global graph | A runtime per actor. The graph isn't thread-safe, so use it from that actor only |
+| Threads | One global graph | A scheduler per serial executor. The graph isn't thread-safe, so use it from one executor |
 | Stopping effects | Freed when unreferenced | Explicit `stop()`, or stopped with their owner |
 | Equality | `Object.is` | `==` for `Equatable`, `equals:`, or always notify |
 | In-place mutation | `arr.push(x)` doesn't notify | `s.value.append(x)` notifies |

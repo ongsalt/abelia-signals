@@ -1,13 +1,14 @@
 import Testing
 @testable import AbeliaSignals
 import Observation
+import Dispatch
 
-// Tests run in parallel, so each gets its own runtime. Nonisolated tests
+// Tests run in parallel, so each gets its own scheduler. Nonisolated tests
 // have no isolation to hop to, so they flush by hand.
-func withRuntime(_ body: (Runtime) throws -> Void) rethrows {
-    let runtime = Runtime()
-    runtime.schedule = { _ in }
-    try runtime.run { try body(runtime) }
+func withScheduler(_ body: (EffectScheduler) throws -> Void) rethrows {
+    let scheduler = EffectScheduler()
+    scheduler.schedule = { _ in }
+    try scheduler.run { try body(scheduler) }
 }
 
 final class Counter {
@@ -16,7 +17,7 @@ final class Counter {
 
 @Test
 func computedIsLazyAndCached() {
-    withRuntime { _ in
+    withScheduler { _ in
         let a = Signal(1)
         let runs = Counter()
         let double = Computed {
@@ -38,7 +39,7 @@ func computedIsLazyAndCached() {
 
 @Test
 func effectsAreBatchedUntilFlush() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(0)
         var seen: [Int] = []
         effect { seen.append(a.value) }
@@ -49,17 +50,17 @@ func effectsAreBatchedUntilFlush() {
         a.value = 3
         #expect(seen == [0])
 
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == [0, 3])
 
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == [0, 3], "nothing pending")
     }
 }
 
 @Test
 func diamondRunsEachNodeOnce() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(1)
         let b = Computed { a.value + 1 }
         let c = Computed { a.value * 10 }
@@ -72,7 +73,7 @@ func diamondRunsEachNodeOnce() {
         effect { seen.append(d.value) }
 
         a.value = 2
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == [12, 23])
         #expect(dRuns.count == 2)
     }
@@ -80,7 +81,7 @@ func diamondRunsEachNodeOnce() {
 
 @Test
 func unchangedComputedStopsPropagation() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(2)
         let isEven = Computed { a.value % 2 == 0 }
         var runs = 0
@@ -90,18 +91,18 @@ func unchangedComputedStopsPropagation() {
         }
 
         a.value = 4
-        runtime.flush()
+        scheduler.flush()
         #expect(runs == 1, "isEven stayed true")
 
         a.value = 5
-        runtime.flush()
+        scheduler.flush()
         #expect(runs == 2)
     }
 }
 
 @Test
 func dependenciesAreDynamic() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let flag = Signal(true)
         let a = Signal("a")
         let b = Signal("b")
@@ -109,22 +110,22 @@ func dependenciesAreDynamic() {
         effect { seen.append(flag.value ? a.value : b.value) }
 
         flag.value = false
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == ["a", "b"])
 
         a.value = "A"
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == ["a", "b"], "a is no longer a dependency")
 
         b.value = "B"
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == ["a", "b", "B"])
     }
 }
 
 @Test
 func inPlaceMutationIsNotARead() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let list = Signal<[Int]>([])
         let other = Signal(0)
         var runs = 0
@@ -136,14 +137,14 @@ func inPlaceMutationIsNotARead() {
         #expect(list.peek == [0])
 
         list.value.append(99)
-        runtime.flush()
+        scheduler.flush()
         #expect(runs == 1, "the effect only wrote list, it doesn't depend on it")
     }
 }
 
 @Test
 func computedIsRemovedOnDeinit() {
-    withRuntime { _ in
+    withScheduler { _ in
         let a = Signal(1)
         do {
             let c = Computed { a.value + 1 }
@@ -155,14 +156,14 @@ func computedIsRemovedOnDeinit() {
 }
 
 @Test
-func freeingTheRuntimeStopsItsEffects() {
-    weak var freed: Runtime?
+func freeingTheSchedulerStopsItsEffects() {
+    weak var freed: EffectScheduler?
     var unscoped: Effect?
     let a = Signal(0)
     do {
-        let runtime = Runtime()
-        runtime.schedule = { _ in }
-        runtime.run {
+        let scheduler = EffectScheduler()
+        scheduler.schedule = { _ in }
+        scheduler.run {
             let c = Computed { a.value }
             let scope = EffectScope()
             scope.run {
@@ -173,16 +174,16 @@ func freeingTheRuntimeStopsItsEffects() {
             }
             unscoped = effect { _ = a.value }
         }
-        freed = runtime
+        freed = scheduler
     }
-    #expect(freed == nil, "effects don't keep their runtime alive")
+    #expect(freed == nil, "effects don't keep their scheduler alive")
     #expect(unscoped?.isStopped == true)
     #expect(a.subscriberCount == 0)
 }
 
 @Test
 func cleanupRunsBeforeRerunAndOnStop() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(0)
         var log: [String] = []
         let e = effect {
@@ -192,20 +193,20 @@ func cleanupRunsBeforeRerunAndOnStop() {
         }
 
         a.value = 1
-        runtime.flush()
+        scheduler.flush()
         e.stop()
         #expect(log == ["run 0", "cleanup 0", "run 1", "cleanup 1"])
         #expect(e.isStopped)
 
         a.value = 2
-        runtime.flush()
+        scheduler.flush()
         #expect(log.count == 4, "stopped effect doesn't run")
     }
 }
 
 @Test
 func nestedEffectsAreStoppedOnParentRerun() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let outer = Signal(0)
         let inner = Signal(0)
         var log: [String] = []
@@ -215,18 +216,18 @@ func nestedEffectsAreStoppedOnParentRerun() {
         }
 
         inner.value = 1
-        runtime.flush()
+        scheduler.flush()
         outer.value = 1
-        runtime.flush()
+        scheduler.flush()
         inner.value = 2
-        runtime.flush()
+        scheduler.flush()
         #expect(log == ["inner 0 0", "inner 0 1", "inner 1 1", "inner 1 2"], "old inner effect is gone")
     }
 }
 
 @Test
 func scopeStopsEverythingInside() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(0)
         var log: [String] = []
         let scope = EffectScope()
@@ -239,10 +240,10 @@ func scopeStopsEverythingInside() {
         }
 
         a.value = 1
-        runtime.flush()
+        scheduler.flush()
         scope.stop()
         a.value = 2
-        runtime.flush()
+        scheduler.flush()
 
         #expect(log == ["e1 0", "child 0", "e1 1", "child 1", "scope cleanup"])
         #expect(a.subscriberCount == 0)
@@ -251,11 +252,11 @@ func scopeStopsEverythingInside() {
 
 @Test
 func scheduleIsCalledOncePerBatch() {
-    let runtime = Runtime()
+    let scheduler = EffectScheduler()
     var scheduled: [() -> Void] = []
-    runtime.schedule = { scheduled.append($0) }
+    scheduler.schedule = { scheduled.append($0) }
 
-    runtime.run {
+    scheduler.run {
         let a = Signal(0)
         let b = Signal(0)
         var runs = 0
@@ -273,17 +274,17 @@ func scheduleIsCalledOncePerBatch() {
         a.value = 2
         #expect(scheduled.count == 1, "next batch schedules again")
     }
-    scheduled.removeAll()  // each holds the runtime, which holds `schedule`
+    scheduled.removeAll()  // each holds the scheduler, which holds `schedule`
 }
 
 @MainActor
 @Test
 func flushHopsBackOntoIsolation() async {
-    let runtime = Runtime()
-    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
-    #expect(runtime.isolation === MainActor.shared)
+    let scheduler = EffectScheduler()
+    defer { withExtendedLifetime(scheduler) {} }  // effects don't keep it alive
+    #expect(scheduler.isolation === MainActor.shared)
 
-    let (a, log) = runtime.run {
+    let (a, log) = scheduler.run {
         let a = Signal(0)
         let log = Counter()
         effect {
@@ -302,7 +303,7 @@ func flushHopsBackOntoIsolation() async {
 
 @Test
 func unwatchedComputedDisconnects() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(1)
         var runs = 0
         let double = Computed {
@@ -329,16 +330,16 @@ final class CounterModel {
 @MainActor
 @Test
 func observedComputedIsMarkedSynchronously() async {
-    let runtime = Runtime()
-    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
+    let scheduler = EffectScheduler()
+    defer { withExtendedLifetime(scheduler) {} }  // effects don't keep it alive
     let model = CounterModel()
-    let offset = runtime.run { Signal(10) }
-    let total = runtime.run { Computed.observing { model.count + offset.value } }
+    let offset = scheduler.run { Signal(10) }
+    let total = scheduler.run { Computed.observing { model.count + offset.value } }
     var seen: [Int] = []
-    runtime.run { effect { seen.append(total.value) } }
+    scheduler.run { effect { seen.append(total.value) } }
 
     model.count = 1
-    #expect(total.value == 11, "no hop needed on the runtime's isolation")
+    #expect(total.value == 11, "no hop needed on the scheduler's isolation")
 
     offset.value = 20
     model.count = 2
@@ -354,12 +355,12 @@ final class SharedModel: @unchecked Sendable {
 @MainActor
 @Test
 func observedChangeFromAnotherThreadHops() async {
-    let runtime = Runtime()
-    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
+    let scheduler = EffectScheduler()
+    defer { withExtendedLifetime(scheduler) {} }  // effects don't keep it alive
     let model = SharedModel()
-    let doubled = runtime.run { Computed.observing { model.count * 2 } }
+    let doubled = scheduler.run { Computed.observing { model.count * 2 } }
     var seen: [Int] = []
-    runtime.run { effect { seen.append(doubled.value) } }
+    scheduler.run { effect { seen.append(doubled.value) } }
 
     await Task.detached { model.count = 3 }.value
     for _ in 0..<100 where seen.count < 2 { await Task.yield() }
@@ -374,7 +375,7 @@ final class PairModel {
 
 @Test
 func observedComputedIgnoresSourcesItNoLongerReads() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let model = PairModel()
         let useA = Signal(true)
         let runs = Counter()
@@ -385,23 +386,23 @@ func observedComputedIgnoresSourcesItNoLongerReads() {
         effect { _ = picked.value }
 
         useA.value = false
-        runtime.flush()
+        scheduler.flush()
         #expect(runs.count == 2)
 
         model.a = 1
-        runtime.flush()
+        scheduler.flush()
         #expect(runs.count == 2, "the observation from the first compute is stale")
 
         model.b = 1
-        runtime.flush()
+        scheduler.flush()
         #expect(runs.count == 3)
     }
 }
 
 actor IsolatedOwner {
     func makeObservingComputed() {
-        let runtime = Runtime()
-        runtime.run { _ = Computed.observing { 1 }.value }
+        let scheduler = EffectScheduler()
+        scheduler.run { _ = Computed.observing { 1 }.value }
     }
 }
 
@@ -420,8 +421,8 @@ final class Log {
     var values: [Int] = []
 }
 
-actor Store {
-    lazy var runtime = Runtime(owner: self)
+actor Store: EffectSchedulerOwner {
+    lazy var effectScheduler = EffectScheduler(owner: self)
     let count = Signal(0)
     let log = Log()
     var observed: Computed<Int>?
@@ -429,36 +430,39 @@ actor Store {
     var seen: [Int] { log.values }
 
     func start() {
-        runtime.run {
-            effect { [count, log] in log.values.append(count.value) }
-            observed = Computed.observing { 1 }
-            _ = observed?.value
-        }
+        makeAppendingEffect(count, log)
+        observed = Computed.observing { 1 }
+        _ = observed?.value
     }
 
     func bump() { count.value += 1 }
 
-    func runtimeIsOwn() -> Bool { runtime.isolation === self }
+    func schedulerIsOwn() -> Bool { EffectScheduler.current === effectScheduler }
+}
+
+// sync and not isolated: the scheduler comes from the executor running it
+nonisolated func makeAppendingEffect(_ count: Signal<Int>, _ log: Log) {
+    effect { log.values.append(count.value) }
 }
 
 @Test
-func actorOwnsItsRuntime() async {
+func actorOwnsItsScheduler() async {
     weak var freed: Store?
     do {
         let store = Store()
         freed = store
-        #expect(await store.runtimeIsOwn())
+        #expect(await store.schedulerIsOwn())
         await store.start()
         await store.bump()
         for _ in 0..<100 where await store.seen.count < 2 { await Task.yield() }
         #expect(await store.seen == [0, 1], "flushed on the store")
     }
-    #expect(freed == nil, "the store, its runtime and its effects go together")
+    #expect(freed == nil, "the store, its scheduler and its effects go together")
 }
 
 @Test
 func computedCanStopItsReaderMidCheck() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let a = Signal(0)
         var reader: Effect?
         let c = Computed { () -> Int in
@@ -474,7 +478,7 @@ func computedCanStopItsReaderMidCheck() {
         reader = effect { _ = mid.value }
 
         a.value = 1
-        runtime.flush()
+        scheduler.flush()
         #expect(reader == nil)
         #expect(mid.peek == 2)
     }
@@ -496,19 +500,19 @@ final class WrappedModel {
 
 @Test
 func propertyWrappers() {
-    withRuntime { runtime in
+    withScheduler { scheduler in
         let model = WrappedModel()
         var seen: [Int] = []
         effect { seen.append(model.doubled) }
 
         model.count = 1
-        runtime.flush()
+        scheduler.flush()
         model.count = 1
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == [0, 2], "an equal write doesn't notify")
 
         model.count += 1
-        runtime.flush()
+        scheduler.flush()
         #expect(seen == [0, 2, 4])
         #expect(model.$count.peek == 2)
         #expect(model.$doubled.peek == 4)
@@ -519,7 +523,7 @@ func propertyWrappers() {
             opaqueRuns += 1
         }
         model.opaque = Opaque()
-        runtime.flush()
+        scheduler.flush()
         #expect(opaqueRuns == 2, "not Equatable: every write notifies")
     }
 }
@@ -535,22 +539,59 @@ func wrappedComputedDoesNotRetainItsObject() {
     #expect(freed == nil)
 }
 
-// sync and not isolated: there's no actor to find a runtime from
 nonisolated func makeLoggingEffect(_ a: Signal<Int>, _ log: Counter) -> Effect {
     effect { log.count = a.value }
 }
 
 @MainActor
 @Test
-func effectDeepInNonisolatedCodeUsesTheBoundRuntime() async {
-    let runtime = Runtime()
-    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
+func effectDeepInNonisolatedCodeUsesTheBoundScheduler() async {
+    let scheduler = EffectScheduler()
+    defer { withExtendedLifetime(scheduler) {} }  // effects don't keep it alive
     let a = Signal(0)
     let log = Counter()
-    let e = runtime.run { makeLoggingEffect(a, log) }
-    #expect(e.runtime === runtime)
+    let e = scheduler.run { makeLoggingEffect(a, log) }
+    #expect(e.scheduler === scheduler)
 
     a.value = 1
     for _ in 0..<100 where log.count == 0 { await Task.yield() }
-    #expect(log.count == 1, "flushed on the main actor, where the runtime was made")
+    #expect(log.count == 1, "flushed on the main actor, where the scheduler was made")
+}
+
+@MainActor
+@Test
+func mainActorCodeUsesTheMainScheduler() async {
+    let a = Signal(0)
+    let log = Counter()
+    let e = makeLoggingEffect(a, log)
+    defer { e.stop() }
+    #expect(e.scheduler === EffectScheduler.main)
+
+    a.value = 1
+    for _ in 0..<100 where log.count == 0 { await Task.yield() }
+    #expect(log.count == 1)
+}
+
+@MainActor
+@Test
+func mainQueueCallbackUsesTheMainScheduler() async {
+    let found = await withCheckedContinuation { continuation in
+        // a dispatch callback isn't a task, so there's no executor to go by
+        DispatchQueue.main.async {
+            let isMain = EffectScheduler.current === EffectScheduler.main
+            continuation.resume(returning: isMain)
+        }
+    }
+    #expect(found)
+}
+
+actor NotAnOwner {
+    func makeEffect() { _ = effect {} }
+}
+
+@Test
+func actorThatIsntAnOwnerTraps() async {
+    await #expect(processExitsWith: .failure) {
+        await NotAnOwner().makeEffect()
+    }
 }

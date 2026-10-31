@@ -6,7 +6,7 @@ extension Computed {
     public static func observing(
         equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value
     ) -> Computed {
-        let tracker = ObservationTracker(isolation: Runtime.current.isolation)
+        let tracker = ObservationTracker(isolation: EffectScheduler.current.isolation)
         let computed = Computed(equals: isEqual) { tracker.track(compute) }
         tracker.node = computed
         return computed
@@ -23,7 +23,7 @@ extension Computed where Value: Equatable {
     }
 }
 
-// Only touched on the runtime's isolation; onChange just schedules onto it.
+// Only touched on the scheduler's isolation; onChange just schedules onto it.
 private final class ObservationTracker: @unchecked Sendable {
     weak var node: ReactiveNode?
     // weak: the actor may own the computed

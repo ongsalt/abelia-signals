@@ -1,5 +1,5 @@
 // Port of alien-signals' index.ts (MIT, see LICENSE), with
-// effects flushed by Runtime instead of synchronously.
+// effects flushed by EffectScheduler instead of synchronously.
 
 public protocol Source<Value>: AnyObject {
     associatedtype Value
@@ -189,17 +189,17 @@ extension Computed where Value: Equatable {
     }
 }
 
-// Owned by the effect, computed or scope it was created in, or by the runtime
+// Owned by the effect, computed or scope it was created in, or by the scheduler
 // outside any of them. Dropping the handle doesn't stop it.
 public final class Effect: ReactiveNode {
-    // see RuntimeHandle
-    let runtimeHandle: RuntimeHandle
-    var runtime: Runtime? { runtimeHandle.runtime?.takeUnretainedValue() }
+    // see SchedulerHandle
+    let schedulerHandle: SchedulerHandle
+    var scheduler: EffectScheduler? { schedulerHandle.scheduler?.takeUnretainedValue() }
     private let body: () -> Void
     @exclusivity(unchecked) var cleanups: [() -> Void] = []
 
-    init(runtime: Runtime, body: @escaping () -> Void) {
-        runtimeHandle = runtime.handle
+    init(scheduler: EffectScheduler, body: @escaping () -> Void) {
+        schedulerHandle = scheduler.handle
         self.body = body
         super.init(flags: [.watching, .recursedCheck])
     }
@@ -242,11 +242,11 @@ public final class Effect: ReactiveNode {
 @discardableResult
 public func effect(_ body: @escaping () -> Void) -> Effect {
     let parent = activeSub
-    let runtime =
-        (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime
-        ?? Runtime.current
-    let effect = Effect(runtime: runtime, body: body)
-    let owner = parent ?? runtime.rootScope
+    let scheduler =
+        (parent as? Effect)?.scheduler ?? (parent as? EffectScope)?.scheduler
+        ?? EffectScheduler.current
+    let effect = Effect(scheduler: scheduler, body: body)
+    let owner = parent ?? scheduler.rootScope
     link(effect, .passUnretained(owner), 0)
     owner.flags.insert(.hasChildEffect)
 
@@ -279,22 +279,22 @@ public func untrack<R>(_ body: () throws -> R) rethrows -> R {
 
 // Like Vue's effectScope. Stops when deinitialized.
 public final class EffectScope: ReactiveNode {
-    // see RuntimeHandle
-    let runtimeHandle: RuntimeHandle
-    var runtime: Runtime? { runtimeHandle.runtime?.takeUnretainedValue() }
+    // see SchedulerHandle
+    let schedulerHandle: SchedulerHandle
+    var scheduler: EffectScheduler? { schedulerHandle.scheduler?.takeUnretainedValue() }
     @exclusivity(unchecked) var cleanups: [() -> Void] = []
 
     // non-detached: owned by the effect or scope it's created in
     public convenience init(detached: Bool = false) {
         let parent = activeSub
-        let runtime =
-            (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime
-            ?? Runtime.current
-        self.init(runtime: runtime, detached: detached)
+        let scheduler =
+            (parent as? Effect)?.scheduler ?? (parent as? EffectScope)?.scheduler
+            ?? EffectScheduler.current
+        self.init(scheduler: scheduler, detached: detached)
     }
 
-    init(runtime: Runtime, detached: Bool) {
-        runtimeHandle = runtime.handle
+    init(scheduler: EffectScheduler, detached: Bool) {
+        schedulerHandle = scheduler.handle
         super.init(flags: .mutable)
         if !detached, let parent = activeSub {
             link(self, .passUnretained(parent), 0)

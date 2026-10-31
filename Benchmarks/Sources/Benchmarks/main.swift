@@ -27,10 +27,10 @@ func bench(_ name: String, opsPerRun: Int = 1, _ make: () -> (() -> Void, () -> 
     print("\(name)\t\(samples[2])")
 }
 
-let runtime = Runtime()
-runtime.schedule = { _ in }
+let scheduler = EffectScheduler()
+scheduler.schedule = { _ in }
 
-runtime.run {
+scheduler.run {
     for w in [1, 10, 100] {
         for h in [1, 10, 100] {
             bench("propagate \(w)x\(h)") {
@@ -49,7 +49,7 @@ runtime.run {
                 }
                 return ({
                     src.value = src.peek + 1
-                    runtime.flush()
+                    scheduler.flush()
                 }, { scope.stop() })
             }
         }
@@ -83,7 +83,7 @@ runtime.run {
         }
         return ({
             which.value = 1 - which.peek
-            runtime.flush()
+            scheduler.flush()
         }, { scope.stop() })
     }
 

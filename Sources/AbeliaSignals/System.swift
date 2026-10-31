@@ -403,7 +403,7 @@ private func isValidLink(_ checkLink: LinkRef, _ sub: NodeRef) -> Bool {
 private func notify(_ effect: NodeRef) {
     effect._withUnsafeGuaranteedRef {
         let effect = unsafeDowncast($0, to: Effect.self)
-        effect.runtimeHandle.runtime?._withUnsafeGuaranteedRef { $0.enqueue(effect) }
+        effect.schedulerHandle.scheduler?._withUnsafeGuaranteedRef { $0.enqueue(effect) }
     }
 }
 

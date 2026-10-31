@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // Tracking state for Signals. Swift has no native thread-locals.
@@ -26,3 +27,14 @@ static inline void csignals_set_walk_depth(uint32_t depth) { csignals_walk_depth
 
 static inline void *_Nullable csignals_get_deferred_links(void) { return csignals_deferred_links; }
 static inline void csignals_set_deferred_links(void *_Nullable link) { csignals_deferred_links = link; }
+
+// UnownedSerialExecutor's layout. A default actor's executor has implementation
+// 0 and the actor as identity; the generic executor has a null identity.
+typedef struct {
+    void *_Nullable identity;
+    uintptr_t implementation;
+} csignals_executor;
+
+csignals_executor csignals_current_executor(void);
+bool csignals_is_current_executor(csignals_executor executor);
+bool csignals_is_main_thread(void);
