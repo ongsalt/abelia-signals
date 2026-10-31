@@ -1,48 +1,18 @@
-// An actor that owns a Runtime. Effects, scopes and observing computeds made
-// on it outside any other effect or scope use this runtime, and are stopped
-// when the runtime is freed:
-//     let signalsRuntime = Runtime()
-public protocol RuntimeOwner: Actor {
-    var signalsRuntime: Runtime { get }
-}
-
-extension MainActor: RuntimeOwner {
-    // the compiler doesn't see `self` as the global main actor
-    public var signalsRuntime: Runtime { MainActor.assumeIsolated { TrustMe(value: mainRuntime) }.value }
-}
-
-@MainActor private let mainRuntime = Runtime()
-
-// Schedules effect re-runs. Tracking state is thread-local (see System.swift).
-// Owns the effects created outside any effect or scope; they don't keep it
-// alive, so whoever creates a runtime must hold it.
+// Schedules effect re-runs and owns top-level effects, which don't keep it alive.
 public final class Runtime {
-    // set by run(), for runtimes no actor owns
+    // task-local so nonisolated sync code sees it too. set only by run()
     @TaskLocal
     private static var _current = TrustMe<Runtime?>(value: nil)
-
-    // the one bound by run(), else the one the caller's actor owns
-    public static func current(isolation: isolated (any Actor)? = #isolation) -> Runtime {
-        if let runtime = _current.value { return runtime }
-        guard let owner = isolation as? any RuntimeOwner else {
+    public static var current: Runtime {
+        guard let runtime = _current.value else {
             preconditionFailure(
-                "No Runtime for \(isolation.map { "\(type(of: $0))" } ?? "nonisolated code"). "
-                    + "Conform the actor to RuntimeOwner, or use Runtime.run")
-        }
-        let runtime = owner.assumeIsolated { TrustMe(value: $0.signalsRuntime) }.value
-        // created in a property initializer, so it learns its owner here
-        if runtime.isolation == nil {
-            runtime.owner = owner
-        } else {
-            precondition(runtime.isolation === owner, "Runtime is owned by another actor")
+                "No current Runtime. Create effects, scopes and observing computeds inside runtime.run { }")
         }
         return runtime
     }
 
-    // Effects re-run in one batched flush per turn, never synchronously on write.
-    // The flush goes to `schedule` if set, else a Task on `isolation`; with
-    // neither, call flush() yourself. `schedule` is called mid-write, so it must
-    // not flush synchronously.
+    // flushes go to `schedule`, else a Task on `isolation`, else call flush().
+    // `schedule` is called mid-write, so it must not flush synchronously.
     public var isolation: (any Actor)? { retainedIsolation ?? owner }
     private let retainedIsolation: (any Actor)?
     // weak: the owner holds the runtime
@@ -55,8 +25,7 @@ public final class Runtime {
 
     // what effects and scopes point at instead of the runtime itself
     let handle = RuntimeHandle()
-    // made once, not per batch. through the handle: it doesn't keep the runtime
-    // alive, and does nothing if the runtime is gone by the time it's called
+    // through the handle, so it doesn't keep the runtime alive
     private let scheduledFlush: () -> Void
 
     @exclusivity(unchecked) private var queued: [Effect?] = []
@@ -64,9 +33,18 @@ public final class Runtime {
     @exclusivity(unchecked) private var notifyIndex = 0
     @exclusivity(unchecked) private var isFlushScheduled = false
 
-    // used through run(), or stored by a RuntimeOwner
-    public init(isolation: isolated (any Actor)? = #isolation) {
+    public convenience init(isolation: isolated (any Actor)? = #isolation) {
+        self.init(isolation: isolation, owner: nil)
+    }
+
+    // for an actor to store: `lazy var runtime = Runtime(owner: self)`
+    public convenience init(owner: isolated any Actor) {
+        self.init(isolation: nil, owner: owner)
+    }
+
+    private init(isolation: (any Actor)?, owner: (any Actor)?) {
         retainedIsolation = isolation
+        self.owner = owner
         scheduledFlush = { [handle] in handle.runtime?._withUnsafeGuaranteedRef { $0.flush() } }
         handle.runtime = .passUnretained(self)
     }
@@ -135,9 +113,8 @@ public final class Runtime {
     }
 }
 
-// Effects and scopes don't keep their runtime alive, but a weak reference to
-// it would move its refcount to a side table, and every retain and release of
-// it onto the slow path. This box is cleared when the runtime is freed instead.
+// Cleared when the runtime is freed. Not a weak ref: those put the runtime's
+// refcount on the slow path.
 final class RuntimeHandle {
     @exclusivity(unchecked) var runtime: Unmanaged<Runtime>?
 }

@@ -4,38 +4,32 @@ import Synchronization
 extension Computed {
     /// tracks @Observable properties
     public static func observing(
-        isolation: isolated (any Actor)? = #isolation,
         equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value
     ) -> Computed {
-        let tracker = ObservationTracker(isolation: isolation)
+        let tracker = ObservationTracker(isolation: Runtime.current.isolation)
         let computed = Computed(equals: isEqual) { tracker.track(compute) }
         tracker.node = computed
         return computed
     }
 
-    public static func observing(
-        isolation: isolated (any Actor)? = #isolation, _ compute: @escaping () -> Value
-    ) -> Computed {
-        observing(isolation: isolation, equals: { _, _ in false }, compute)
+    public static func observing(_ compute: @escaping () -> Value) -> Computed {
+        observing(equals: { _, _ in false }, compute)
     }
 }
 
 extension Computed where Value: Equatable {
-    public static func observing(
-        isolation: isolated (any Actor)? = #isolation, _ compute: @escaping () -> Value
-    ) -> Computed {
-        observing(isolation: isolation, equals: ==, compute)
+    public static func observing(_ compute: @escaping () -> Value) -> Computed {
+        observing(equals: ==, compute)
     }
 }
 
-// Only touched on `isolation`; onChange just schedules onto it.
+// Only touched on the runtime's isolation; onChange just schedules onto it.
 private final class ObservationTracker: @unchecked Sendable {
     weak var node: ReactiveNode?
     // weak: the actor may own the computed
     private weak var isolation: (any Actor)?
     private let isIsolated: Bool
-    // bumped per track(). a registration can't be cancelled until it fires, so
-    // ones from earlier computes cancel themselves without invalidating
+    // bumped per track(); stale registrations cancel without invalidating
     private let generation = Atomic<UInt64>(0)
 
     init(isolation: (any Actor)?) {
@@ -63,10 +57,8 @@ private final class ObservationTracker: @unchecked Sendable {
     }
 }
 
-// An isolated closure needs the actor captured strongly, and the actor may own
-// the computed, so it's built per change rather than stored. Building one
-// doesn't run anything on the actor, so off it this does what assumeIsolated
-// does, minus the check.
+// Built per change: a stored isolated closure would retain the actor. Same
+// cast as assumeIsolated, minus the check; nothing runs off the actor.
 private func makeInvalidate(
     _ isolation: any Actor, _ tracker: ObservationTracker
 ) -> @isolated(any) () async -> Void {

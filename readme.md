@@ -4,14 +4,20 @@ Fine-grained reactivity for Swift: signals, lazy computeds and batched effects.
 The algorithm is ported from [alien-signals](https://github.com/stackblitz/alien-signals).
 
 ```swift
-@MainActor func setup() {
+@MainActor final class App {
+    let runtime: Runtime
     let count = Signal(0)
-    let doubled = Computed { count.value * 2 }
 
-    effect { print("count", count.value, "doubled", doubled.value) }   // prints now
+    init() { runtime = Runtime() }   // flushes on the main actor, where it's created
 
-    count.value = 1
-    count.value = 2   // both writes land in one re-run, on the next main actor turn
+    func setup() {
+        let doubled = Computed { [count] in count.value * 2 }
+        runtime.run {
+            effect { [count] in print("count", count.value, "doubled", doubled.value) }   // prints now
+        }
+        count.value = 1
+        count.value = 2   // both writes land in one re-run, on the next main actor turn
+    }
 }
 ```
 
@@ -109,32 +115,55 @@ threads hop onto that actor first.
 ## Runtimes
 
 Effects never re-run synchronously on write. They're queued, and a `Runtime` flushes
-them in one batch. Each actor gets its own runtime, found from the caller's isolation,
-so creating effects needs no setup.
+them in one batch, on the actor it was created on. Effects, scopes and observing
+computeds are created inside `runtime.run { }`, which binds `Runtime.current`; outside
+of it they trap. It's a task-local, so it reaches any depth of synchronous code inside
+`run`, isolated or not. Effects created inside an effect or scope use its runtime
+without another `run`. Signals and computeds don't need a runtime.
 
 ### On the main actor
 
-`MainActor` already owns a runtime. Effects created on it flush on the next main actor turn.
+Create the runtime on the main actor and keep it, e.g. on the object that owns the
+effects. Effects don't keep their runtime alive. Create it in `init`, not in a
+property initializer: those aren't isolated, so it would get no actor to flush on.
+
+```swift
+@MainActor final class ViewModel {
+    let runtime: Runtime
+    let count = Signal(0)
+
+    init() { runtime = Runtime() }
+
+    func start() {
+        runtime.run {
+            effect { [count] in print(count.value) }
+        }
+    }
+}
+```
 
 ### On your own actor
 
-Conform to `RuntimeOwner` and store a runtime:
+Store a runtime and create the actor's effects inside `run`:
 
 ```swift
-actor Store: RuntimeOwner {
-    let signalsRuntime = Runtime()
+actor Store {
+    lazy var runtime = Runtime(owner: self)   // doesn't keep the actor alive
 
     let count = Signal(0)
     let doubled = Signal(0)
 
     func start() {
-        effect { [count, doubled] in doubled.value = count.value * 2 }
+        runtime.run {
+            effect { [count, doubled] in doubled.value = count.value * 2 }
+        }
     }
 }
 ```
 
-The actor owns the runtime, and the runtime owns the effects created on the actor, so
-all three are freed together.
+The actor owns the runtime, and the runtime owns the effects created in `run`, so all
+three are freed together. Effects created inside those effects use the same runtime
+without another `run`.
 
 Effect bodies on an actor should capture what they use, not `self`:
 
@@ -154,11 +183,8 @@ the capture list.
 Set `schedule` to hand flushes to another loop:
 
 ```swift
-let signalsRuntime: Runtime = {
-    let runtime = Runtime()
-    runtime.schedule = { flush in myLoop.post(flush) }
-    return runtime
-}()
+let runtime = Runtime()
+runtime.schedule = { flush in myLoop.post(flush) }
 ```
 
 `schedule` is called in the middle of a write, so it must not call `flush` synchronously.
@@ -174,9 +200,7 @@ runtime.run {
 runtime.flush()
 ```
 
-`runtime.run` takes priority over the actor's runtime, which is also how tests get
-isolated runtimes. Creating a top-level effect outside both traps, with a message
-saying so.
+That's also how tests get a runtime each.
 
 ## Lifetimes
 

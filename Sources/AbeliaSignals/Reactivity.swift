@@ -6,8 +6,7 @@ public protocol Source<Value>: AnyObject {
     var value: Value { get }
 }
 
-// Also a property wrapper: `@Signal var count = 0` reads and writes the signal,
-// and `$count` is the Signal itself, to capture in effects instead of `self`.
+// also a property wrapper; `$count` is the Signal
 @propertyWrapper
 public final class Signal<Value>: ReactiveNode, Source {
     @exclusivity(unchecked) @usableFromInline var stored: Value
@@ -26,8 +25,7 @@ public final class Signal<Value>: ReactiveNode, Source {
         self.init(value, equals: { _, _ in false })
     }
 
-    // inlinable so clients specialize on Value; the graph work is behind
-    // non-generic calls
+    // inlinable so clients specialize on Value
     @inlinable public var value: Value {
         get {
             signalRead()
@@ -83,9 +81,8 @@ extension Signal where Value: Equatable {
     }
 }
 
-// The non-generic half of Computed. `recompute` is built by Computed's
-// inlinable init, so it's specialized for the client's Value; a generic
-// update() here would run unspecialized.
+// Non-generic half of Computed: a generic update() would run unspecialized.
+// `recompute` comes from Computed's inlinable init, specialized by the client.
 public class ComputedNode: ReactiveNode {
     // stores the new value, returns whether it changed
     @usableFromInline let recompute: (ComputedNode) -> Bool
@@ -115,21 +112,14 @@ public class ComputedNode: ReactiveNode {
     }
 }
 
-// Lazy and cached. With no subscribers left it unlinks from its sources and
-// recomputes on the next read.
-//
-// Also a read-only property wrapper, set up in init since it has no initial
-// value. Capture signals, not `self`, or the object keeps itself alive. In
-// init that's the backing `_count`: `$count` still counts as using self:
-//     @Computed var doubled: Int
-//     init() { _doubled = Computed { [count = _count] in count.value * 2 } }
+// Lazy and cached. Unwatched, it unlinks from its sources until read again.
+// Also a read-only property wrapper, set in init: `_doubled = Computed { … }`
 @propertyWrapper
 public final class Computed<Value>: ComputedNode, Source {
     @exclusivity(unchecked) @usableFromInline var cached: Value?
     @usableFromInline let compute: () -> Value
     @usableFromInline let isEqual: (Value, Value) -> Bool
 
-    // `recompute` captures nothing, so specialized it needs no context allocation
     @inlinable
     public init(equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value) {
         self.compute = compute
@@ -202,7 +192,7 @@ extension Computed where Value: Equatable {
 // Owned by the effect, computed or scope it was created in, or by the runtime
 // outside any of them. Dropping the handle doesn't stop it.
 public final class Effect: ReactiveNode {
-    // not the runtime: it owns root effects. once it's gone this never re-runs
+    // see RuntimeHandle
     let runtimeHandle: RuntimeHandle
     var runtime: Runtime? { runtimeHandle.runtime?.takeUnretainedValue() }
     private let body: () -> Void
@@ -250,13 +240,11 @@ public final class Effect: ReactiveNode {
 // Runs `body` now, then again in the next flush after anything it read changes.
 // Effects created inside `body` are stopped before each re-run.
 @discardableResult
-public func effect(
-    isolation: isolated (any Actor)? = #isolation, _ body: @escaping () -> Void
-) -> Effect {
+public func effect(_ body: @escaping () -> Void) -> Effect {
     let parent = activeSub
     let runtime =
         (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime
-        ?? Runtime.current(isolation: isolation)
+        ?? Runtime.current
     let effect = Effect(runtime: runtime, body: body)
     let owner = parent ?? runtime.rootScope
     link(effect, .passUnretained(owner), 0)
@@ -291,17 +279,17 @@ public func untrack<R>(_ body: () throws -> R) rethrows -> R {
 
 // Like Vue's effectScope. Stops when deinitialized.
 public final class EffectScope: ReactiveNode {
-    // not the runtime: it owns rootScope
+    // see RuntimeHandle
     let runtimeHandle: RuntimeHandle
     var runtime: Runtime? { runtimeHandle.runtime?.takeUnretainedValue() }
     @exclusivity(unchecked) var cleanups: [() -> Void] = []
 
-    // a non-detached scope is owned and stopped by the effect or scope active when it's created
-    public convenience init(detached: Bool = false, isolation: isolated (any Actor)? = #isolation) {
+    // non-detached: owned by the effect or scope it's created in
+    public convenience init(detached: Bool = false) {
         let parent = activeSub
         let runtime =
             (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime
-            ?? Runtime.current(isolation: isolation)
+            ?? Runtime.current
         self.init(runtime: runtime, detached: detached)
     }
 

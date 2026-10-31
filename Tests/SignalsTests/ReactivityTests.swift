@@ -416,27 +416,12 @@ func observingComputedDoesNotRetainItsIsolation() async {
     #expect(freed == nil)
 }
 
-@MainActor
-@Test
-func defaultRuntimeFlushesOnMainActor() async {
-    #expect(Runtime.current().isolation === MainActor.shared)
-
-    let a = Signal(0)
-    let log = Counter()
-    let e = effect { log.count = a.value }
-    defer { e.stop() }
-
-    a.value = 1
-    for _ in 0..<100 where log.count == 0 { await Task.yield() }
-    #expect(log.count == 1, "no flush() or schedule needed")
-}
-
 final class Log {
     var values: [Int] = []
 }
 
-actor Store: RuntimeOwner {
-    let signalsRuntime = Runtime()
+actor Store {
+    lazy var runtime = Runtime(owner: self)
     let count = Signal(0)
     let log = Log()
     var observed: Computed<Int>?
@@ -444,14 +429,16 @@ actor Store: RuntimeOwner {
     var seen: [Int] { log.values }
 
     func start() {
-        effect { [count, log] in log.values.append(count.value) }
-        observed = Computed.observing { 1 }
-        _ = observed?.value
+        runtime.run {
+            effect { [count, log] in log.values.append(count.value) }
+            observed = Computed.observing { 1 }
+            _ = observed?.value
+        }
     }
 
     func bump() { count.value += 1 }
 
-    func runtimeIsOwn() -> Bool { Runtime.current().isolation === self }
+    func runtimeIsOwn() -> Bool { runtime.isolation === self }
 }
 
 @Test
@@ -464,7 +451,7 @@ func actorOwnsItsRuntime() async {
         await store.start()
         await store.bump()
         for _ in 0..<100 where await store.seen.count < 2 { await Task.yield() }
-        #expect(await store.seen == [0, 1], "flushed on the store without any setup")
+        #expect(await store.seen == [0, 1], "flushed on the store")
     }
     #expect(freed == nil, "the store, its runtime and its effects go together")
 }
@@ -546,4 +533,24 @@ func wrappedComputedDoesNotRetainItsObject() {
         #expect(model.doubled == 0)
     }
     #expect(freed == nil)
+}
+
+// sync and not isolated: there's no actor to find a runtime from
+nonisolated func makeLoggingEffect(_ a: Signal<Int>, _ log: Counter) -> Effect {
+    effect { log.count = a.value }
+}
+
+@MainActor
+@Test
+func effectDeepInNonisolatedCodeUsesTheBoundRuntime() async {
+    let runtime = Runtime()
+    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
+    let a = Signal(0)
+    let log = Counter()
+    let e = runtime.run { makeLoggingEffect(a, log) }
+    #expect(e.runtime === runtime)
+
+    a.value = 1
+    for _ in 0..<100 where log.count == 0 { await Task.yield() }
+    #expect(log.count == 1, "flushed on the main actor, where the runtime was made")
 }

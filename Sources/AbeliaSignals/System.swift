@@ -47,12 +47,8 @@ var runDepth: UInt32 {
 }
 
 // A sub owns its dep links, and through them its deps. Graph pointers are
-// stored Unmanaged so walking the graph never retains: each link is retained
-// once when it's inserted and released by unlink, after it's removed from both
-// lists, or later if a checkDirty walk is in progress (see releaseLink). Only
-// Link.dep is a real strong reference.
-// Graph fields skip dynamic exclusivity checks: only this module touches them,
-// never with overlapping accesses.
+// Unmanaged so walks never retain; a link holds +1 until unlink (see releaseLink).
+// No exclusivity checks: only this module touches these, never overlapping.
 public class ReactiveNode {
     @exclusivity(unchecked) var flags: ReactiveFlags
     @exclusivity(unchecked) var deps: LinkRef?
@@ -214,9 +210,8 @@ func unlink(_ link: LinkRef, _ sub: NodeRef) -> LinkRef? {
     return nextDep
 }
 
-// checkDirty runs computeds, which are user code that can unlink what the walk
-// is on. Rather than retaining every step, links unlinked during a walk are
-// freed once the outermost walk ends, so whatever it reaches stays valid.
+// computeds can unlink what a checkDirty walk is on, so links unlinked during
+// a walk are freed when the outermost walk ends
 private func releaseLink(_ link: LinkRef) {
     if csignals_get_walk_depth() == 0 {
         link.release()
@@ -236,8 +231,7 @@ private func releaseDeferredLinks() {
     }
 }
 
-// A stack in the caller's frame up to `buffer.count` entries, spilling to the
-// heap past that. The walks below are rarely that deep, so rarely allocate.
+// on the caller's stack, spilling to the heap past `buffer.count`
 struct ScratchStack<Element> {
     let buffer: UnsafeMutableBufferPointer<Element>
     var count = 0
@@ -261,7 +255,7 @@ struct ScratchStack<Element> {
     }
 }
 
-// 120 refs fit in the 1KB withUnsafeTemporaryAllocation keeps on the stack
+// fits withUnsafeTemporaryAllocation's 1KB stack limit
 let scratchCapacity = 120
 
 func propagate(_ start: LinkRef, innerWrite: Bool) {
@@ -317,8 +311,6 @@ func propagate(_ start: LinkRef, innerWrite: Bool) {
     }
 }
 
-// update() runs user code that can unlink nodes on the walk; links stay valid
-// until the outermost walk ends (see releaseLink)
 func checkDirty(_ start: LinkRef, _ startSub: ReactiveNode) -> Bool {
     let depth = csignals_get_walk_depth()
     csignals_set_walk_depth(depth + 1)
