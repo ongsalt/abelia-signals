@@ -1,15 +1,52 @@
+// An actor that owns a Runtime. Effects, scopes and observing computeds made
+// on it outside any other effect or scope use this runtime, and are stopped
+// when the runtime is freed:
+//     let signalsRuntime = Runtime()
+public protocol RuntimeOwner: Actor {
+    var signalsRuntime: Runtime { get }
+}
+
+extension MainActor: RuntimeOwner {
+    // the compiler doesn't see `self` as the global main actor
+    public var signalsRuntime: Runtime { MainActor.assumeIsolated { TrustMe(value: mainRuntime) }.value }
+}
+
+@MainActor private let mainRuntime = Runtime()
+
 // Schedules effect re-runs. Tracking state is thread-local (see System.swift).
+// Owns the effects created outside any effect or scope; they don't keep it
+// alive, so whoever creates a runtime must hold it.
 public final class Runtime {
-    // the default runs on the main actor, like UI code
+    // set by run(), for runtimes no actor owns
     @TaskLocal
-    private static var _current = TrustMe(value: Runtime(unsafeIsolation: MainActor.shared))
-    public static var current: Runtime { _current.value }
+    private static var _current = TrustMe<Runtime?>(value: nil)
+
+    // the one bound by run(), else the one the caller's actor owns
+    public static func current(isolation: isolated (any Actor)? = #isolation) -> Runtime {
+        if let runtime = _current.value { return runtime }
+        guard let owner = isolation as? any RuntimeOwner else {
+            preconditionFailure(
+                "No Runtime for \(isolation.map { "\(type(of: $0))" } ?? "nonisolated code"). "
+                    + "Conform the actor to RuntimeOwner, or use Runtime.run")
+        }
+        let runtime = owner.assumeIsolated { TrustMe(value: $0.signalsRuntime) }.value
+        // created in a property initializer, so it learns its owner here
+        if runtime.isolation == nil {
+            runtime.owner = owner
+        } else {
+            precondition(runtime.isolation === owner, "Runtime is owned by another actor")
+        }
+        return runtime
+    }
 
     // Effects re-run in one batched flush per turn, never synchronously on write.
     // The flush goes to `schedule` if set, else a Task on `isolation`; with
     // neither, call flush() yourself. `schedule` is called mid-write, so it must
     // not flush synchronously.
-    public let isolation: (any Actor)?
+    public var isolation: (any Actor)? { retainedIsolation ?? owner }
+    private let retainedIsolation: (any Actor)?
+    // weak: the owner holds the runtime
+    private weak var owner: (any Actor)?
 
     public var schedule: ((@escaping () -> Void) -> Void)?
 
@@ -21,13 +58,9 @@ public final class Runtime {
     @exclusivity(unchecked) private var notifyIndex = 0
     @exclusivity(unchecked) private var isFlushScheduled = false
 
+    // used through run(), or stored by a RuntimeOwner
     public init(isolation: isolated (any Actor)? = #isolation) {
-        self.isolation = isolation
-    }
-
-    // for the default, which can't be created on the actor it uses
-    private init(unsafeIsolation: (any Actor)?) {
-        self.isolation = unsafeIsolation
+        retainedIsolation = isolation
     }
 
     @discardableResult

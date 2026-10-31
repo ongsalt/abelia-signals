@@ -142,7 +142,8 @@ extension Computed where Value: Equatable {
 // Owned by the effect, computed or scope it was created in, or by the runtime
 // outside any of them. Dropping the handle doesn't stop it.
 public final class Effect: ReactiveNode {
-    let runtime: Runtime
+    // weak: the runtime owns root effects. once it's gone this never re-runs
+    weak var runtime: Runtime?
     private let body: () -> Void
     var cleanups: [() -> Void] = []
 
@@ -189,9 +190,13 @@ public final class Effect: ReactiveNode {
 // Runs `body` now, then again in the next flush after anything it read changes.
 // Effects created inside `body` are stopped before each re-run.
 @discardableResult
-public func effect(_ body: @escaping () -> Void) -> Effect {
+public func effect(
+    isolation: isolated (any Actor)? = #isolation, _ body: @escaping () -> Void
+) -> Effect {
     let parent = activeSub
-    let runtime = (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime ?? Runtime.current
+    let runtime =
+        (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime
+        ?? Runtime.current(isolation: isolation)
     let effect = Effect(runtime: runtime, body: body)
     let owner = parent ?? runtime.rootScope
     link(effect, .passUnretained(owner), 0)
@@ -204,6 +209,20 @@ public func effect(_ body: @escaping () -> Void) -> Effect {
     activeSub = parent
     effect.flags.remove(.recursedCheck)
     return effect
+}
+
+extension RuntimeOwner {
+    // `effect` for actor state. A body capturing `self` would keep the actor
+    // alive through its own runtime, and `[weak self]` loses the isolation, so
+    // this holds the actor weakly and passes it in isolated.
+    @discardableResult
+    public func effect(_ body: @escaping (isolated Self) -> Void) -> Effect {
+        // only ever called on self, which assumeIsolated checks
+        let body = TrustMe(value: body)
+        return AbeliaSignals.effect { [weak self] in
+            self?.assumeIsolated { body.value($0) }
+        }
+    }
 }
 
 // Inside an effect: runs before its next run and when it stops.
@@ -226,14 +245,16 @@ public func untrack<R>(_ body: () throws -> R) rethrows -> R {
 
 // Like Vue's effectScope. Stops when deinitialized.
 public final class EffectScope: ReactiveNode {
-    // unowned: the runtime owns rootScope
-    unowned let runtime: Runtime
+    // weak: the runtime owns rootScope
+    weak var runtime: Runtime?
     var cleanups: [() -> Void] = []
 
     // a non-detached scope is owned and stopped by the effect or scope active when it's created
-    public convenience init(detached: Bool = false) {
+    public convenience init(detached: Bool = false, isolation: isolated (any Actor)? = #isolation) {
         let parent = activeSub
-        let runtime = (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime ?? Runtime.current
+        let runtime =
+            (parent as? Effect)?.runtime ?? (parent as? EffectScope)?.runtime
+            ?? Runtime.current(isolation: isolation)
         self.init(runtime: runtime, detached: detached)
     }
 

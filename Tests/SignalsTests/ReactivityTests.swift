@@ -155,14 +155,14 @@ func computedIsRemovedOnDeinit() {
 }
 
 @Test
-func runtimeIsFreedOnceItsEffectsStop() {
+func freeingTheRuntimeStopsItsEffects() {
     weak var freed: Runtime?
     var unscoped: Effect?
+    let a = Signal(0)
     do {
         let runtime = Runtime()
         runtime.schedule = { _ in }
         runtime.run {
-            let a = Signal(0)
             let c = Computed { a.value }
             let scope = EffectScope()
             scope.run {
@@ -175,10 +175,9 @@ func runtimeIsFreedOnceItsEffectsStop() {
         }
         freed = runtime
     }
-    #expect(freed != nil, "an unscoped effect keeps its runtime alive")
-    unscoped?.stop()
-    unscoped = nil
-    #expect(freed == nil, "no reference cycle through nodes or scopes")
+    #expect(freed == nil, "effects don't keep their runtime alive")
+    #expect(unscoped?.isStopped == true)
+    #expect(a.subscriberCount == 0)
 }
 
 @Test
@@ -280,6 +279,7 @@ func scheduleIsCalledOncePerBatch() {
 @Test
 func flushHopsBackOntoIsolation() async {
     let runtime = Runtime()
+    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
     #expect(runtime.isolation === MainActor.shared)
 
     let (a, log) = runtime.run {
@@ -329,6 +329,7 @@ final class CounterModel {
 @Test
 func observedComputedIsMarkedSynchronously() async {
     let runtime = Runtime()
+    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
     let model = CounterModel()
     let offset = runtime.run { Signal(10) }
     let total = runtime.run { Computed.observing { model.count + offset.value } }
@@ -353,6 +354,7 @@ final class SharedModel: @unchecked Sendable {
 @Test
 func observedChangeFromAnotherThreadHops() async {
     let runtime = Runtime()
+    defer { withExtendedLifetime(runtime) {} }  // effects don't keep it alive
     let model = SharedModel()
     let doubled = runtime.run { Computed.observing { model.count * 2 } }
     var seen: [Int] = []
@@ -416,7 +418,7 @@ func observingComputedDoesNotRetainItsIsolation() async {
 @MainActor
 @Test
 func defaultRuntimeFlushesOnMainActor() async {
-    #expect(Runtime.current.isolation === MainActor.shared)
+    #expect(Runtime.current().isolation === MainActor.shared)
 
     let a = Signal(0)
     let log = Counter()
@@ -426,4 +428,36 @@ func defaultRuntimeFlushesOnMainActor() async {
     a.value = 1
     for _ in 0..<100 where log.count == 0 { await Task.yield() }
     #expect(log.count == 1, "no flush() or schedule needed")
+}
+
+actor Store: RuntimeOwner {
+    let signalsRuntime = Runtime()
+    let count = Signal(0)
+    var seen: [Int] = []
+    var observed: Computed<Int>?
+
+    func start() {
+        effect { store in store.seen.append(store.count.value) }
+        observed = Computed.observing { 1 }
+        _ = observed?.value
+    }
+
+    func bump() { count.value += 1 }
+
+    func runtimeIsOwn() -> Bool { Runtime.current().isolation === self }
+}
+
+@Test
+func actorOwnsItsRuntime() async {
+    weak var freed: Store?
+    do {
+        let store = Store()
+        freed = store
+        #expect(await store.runtimeIsOwn())
+        await store.start()
+        await store.bump()
+        for _ in 0..<100 where await store.seen.count < 2 { await Task.yield() }
+        #expect(await store.seen == [0, 1], "flushed on the store without any setup")
+    }
+    #expect(freed == nil, "the store, its runtime and its effects go together")
 }
