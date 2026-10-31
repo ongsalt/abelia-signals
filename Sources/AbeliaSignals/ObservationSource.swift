@@ -1,7 +1,8 @@
 import Observation
+import Synchronization
 
 extension Computed {
-    // tracks @Observable properties
+    /// tracks @Observable properties
     public static func observing(
         equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value
     ) -> Computed {
@@ -27,13 +28,17 @@ private final class ObservationTracker: @unchecked Sendable {
     weak var node: ReactiveNode?
     // non-Sendable so it inherits `isolation`; a @Sendable closure wouldn't
     private var invalidateOnIsolation: TrustMe<@isolated(any) () async -> Void>?
+    // bumped per track(). a registration can't be cancelled until it fires, so
+    // ones from earlier computes cancel themselves without invalidating
+    private let generation = Atomic<UInt64>(0)
 
     init(isolation: (any Actor)?) {
         guard let isolation else { return }
         invalidateOnIsolation = isolation.assumeIsolated { isolation in
-            let invalidate: @isolated(any) () async -> Void = { [self] in
+            // weak: stored on self
+            let invalidate: @isolated(any) () async -> Void = { [weak self] in
                 _ = isolation
-                invalidate()
+                self?.invalidate()
             }
             precondition(invalidate.isolation === isolation)
             return TrustMe(value: invalidate)
@@ -41,8 +46,10 @@ private final class ObservationTracker: @unchecked Sendable {
     }
 
     func track<Value>(_ compute: () -> Value) -> Value {
-        withObservationTracking(options: .didSet, compute) { [self] event in
+        let current = generation.add(1, ordering: .relaxed).newValue
+        return withObservationTracking(options: .didSet, compute) { [weak self] event in
             event.cancel()
+            guard let self, generation.load(ordering: .relaxed) == current else { return }
             if let invalidateOnIsolation {
                 Task.immediate(operation: invalidateOnIsolation.value)
             } else {

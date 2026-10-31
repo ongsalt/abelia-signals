@@ -362,3 +362,53 @@ func observedChangeFromAnotherThreadHops() async {
     for _ in 0..<100 where seen.count < 2 { await Task.yield() }
     #expect(seen == [0, 6])
 }
+
+@Observable
+final class PairModel {
+    var a = 0
+    var b = 0
+}
+
+@Test
+func observedComputedIgnoresSourcesItNoLongerReads() {
+    withRuntime { runtime in
+        let model = PairModel()
+        let useA = Signal(true)
+        let runs = Counter()
+        let picked = Computed.observing {
+            runs.count += 1
+            return useA.value ? model.a : model.b
+        }
+        effect { _ = picked.value }
+
+        useA.value = false
+        runtime.flush()
+        #expect(runs.count == 2)
+
+        model.a = 1
+        runtime.flush()
+        #expect(runs.count == 2, "the observation from the first compute is stale")
+
+        model.b = 1
+        runtime.flush()
+        #expect(runs.count == 3)
+    }
+}
+
+actor IsolatedOwner {
+    func makeObservingComputed() {
+        let runtime = Runtime()
+        runtime.run { _ = Computed.observing { 1 }.value }
+    }
+}
+
+@Test
+func observingComputedDoesNotRetainItsIsolation() async {
+    weak var freed: IsolatedOwner?
+    do {
+        let owner = IsolatedOwner()
+        freed = owner
+        await owner.makeObservingComputed()
+    }
+    #expect(freed == nil)
+}
