@@ -1,7 +1,8 @@
 // Schedules effect re-runs. Tracking state is thread-local (see System.swift).
 public final class Runtime {
+    // the default runs on the main actor, like UI code
     @TaskLocal
-    private static var _current = TrustMe(value: Runtime())
+    private static var _current = TrustMe(value: Runtime(unsafeIsolation: MainActor.shared))
     public static var current: Runtime { _current.value }
 
     // Effects re-run in one batched flush per turn, never synchronously on write.
@@ -22,6 +23,11 @@ public final class Runtime {
 
     public init(isolation: isolated (any Actor)? = #isolation) {
         self.isolation = isolation
+    }
+
+    // for the default, which can't be created on the actor it uses
+    private init(unsafeIsolation: (any Actor)?) {
+        self.isolation = unsafeIsolation
     }
 
     @discardableResult

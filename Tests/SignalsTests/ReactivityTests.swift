@@ -412,3 +412,18 @@ func observingComputedDoesNotRetainItsIsolation() async {
     }
     #expect(freed == nil)
 }
+
+@MainActor
+@Test
+func defaultRuntimeFlushesOnMainActor() async {
+    #expect(Runtime.current.isolation === MainActor.shared)
+
+    let a = Signal(0)
+    let log = Counter()
+    let e = effect { log.count = a.value }
+    defer { e.stop() }
+
+    a.value = 1
+    for _ in 0..<100 where log.count == 0 { await Task.yield() }
+    #expect(log.count == 1, "no flush() or schedule needed")
+}
