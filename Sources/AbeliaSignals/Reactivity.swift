@@ -105,7 +105,7 @@ public class ComputedNode: ReactiveNode {
         return changed
     }
 
-    final override func unwatched() {
+    override func unwatched() {
         guard depsTail != nil else { return }
         flags = [.mutable, .dirty]
         disposeAllDepsInReverse(self)
@@ -113,12 +113,10 @@ public class ComputedNode: ReactiveNode {
 }
 
 // Lazy and cached. Unwatched, it unlinks from its sources until read again.
-// Also a read-only property wrapper, set in init: `_doubled = Computed { … }`
-@propertyWrapper
-public final class Computed<Value>: ComputedNode, Source {
-    @exclusivity(unchecked) @usableFromInline var cached: Value?
-    @usableFromInline let compute: () -> Value
-    @usableFromInline let isEqual: (Value, Value) -> Bool
+public class Computed<Value>: ComputedNode, Source {
+    @exclusivity(unchecked) @usableFromInline final var cached: Value?
+    @usableFromInline final let compute: () -> Value
+    @usableFromInline final let isEqual: (Value, Value) -> Bool
 
     @inlinable
     public init(equals isEqual: @escaping (Value, Value) -> Bool, _ compute: @escaping () -> Value) {
@@ -139,20 +137,76 @@ public final class Computed<Value>: ComputedNode, Source {
         self.init(equals: { _, _ in false }, compute)
     }
 
-    @inlinable public var value: Value {
+    @inlinable public final var value: Value {
         computedRead(tracked: true)
         return cached!
     }
 
-    @inlinable public var peek: Value {
+    @inlinable public final var peek: Value {
         computedRead(tracked: false)
         return cached!
     }
-
-    @inlinable public var wrappedValue: Value { value }
-
-    @inlinable public var projectedValue: Computed<Value> { self }
 }
+
+// for tracking owner lifetime, use with @Computed
+@usableFromInline final class OwnedComputed<Value>: Computed<Value> {
+    @usableFromInline let owner: Unmanaged<AnyObject>
+    @exclusivity(unchecked) var holdsOwner = false
+
+    @usableFromInline init(
+        owner: Unmanaged<AnyObject>, equals isEqual: @escaping (Value, Value) -> Bool,
+        _ compute: @escaping () -> Value
+    ) {
+        self.owner = owner
+        super.init(equals: isEqual, compute)
+    }
+
+    override func watched() {
+        if holdsOwner { return }
+        _ = owner.retain()
+        holdsOwner = true
+    }
+
+    override func unwatched() {
+        super.unwatched()
+        // last: can free the owner. this node is still held by the link going away
+        if holdsOwner {
+            holdsOwner = false
+            owner.release()
+        }
+    }
+}
+
+// for the @Computed expansion: `compute` is an unapplied method, so reads
+// capture nothing
+@inlinable
+public func _makeComputed<Owner: AnyObject, Value>(
+    _ owner: Owner, _ compute: @escaping (Owner) -> () -> Value
+) -> Computed<Value> {
+    let ref = Unmanaged.passUnretained(owner)
+    return OwnedComputed(owner: .passUnretained(owner), equals: { _, _ in false }) {
+        compute(ref.takeUnretainedValue())()
+    }
+}
+
+@inlinable
+public func _makeComputed<Owner: AnyObject, Value: Equatable>(
+    _ owner: Owner, _ compute: @escaping (Owner) -> () -> Value
+) -> Computed<Value> {
+    let ref = Unmanaged.passUnretained(owner)
+    return OwnedComputed(owner: .passUnretained(owner), equals: ==) {
+        compute(ref.takeUnretainedValue())()
+    }
+}
+
+// Makes a class's computed property a Computed, cached until what it reads changes:
+//     @Computed var doubled: Int { count * 2 }
+// `$doubled` is the Computed itself, as visible as the property.
+// Whatever reads it keeps the object alive, like a closure capturing it would;
+// unread, it doesn't.
+@attached(body)
+@attached(peer, names: prefixed(`$`), prefixed(_$computed_), prefixed(_$compute_))
+public macro Computed() = #externalMacro(module: "AbeliaSignalsMacros", type: "ComputedMacro")
 
 extension ReactiveNode {
     @usableFromInline func signalRead() {

@@ -1,7 +1,8 @@
-import Testing
-@testable import AbeliaSignals
-import Observation
 import Dispatch
+import Observation
+import Testing
+
+@testable import AbeliaSignals
 
 // Tests run in parallel, so each gets its own scheduler. Nonisolated tests
 // have no isolation to hop to, so they flush by hand.
@@ -221,7 +222,8 @@ func nestedEffectsAreStoppedOnParentRerun() {
         scheduler.flush()
         inner.value = 2
         scheduler.flush()
-        #expect(log == ["inner 0 0", "inner 0 1", "inner 1 1", "inner 1 2"], "old inner effect is gone")
+        #expect(
+            log == ["inner 0 0", "inner 0 1", "inner 1 1", "inner 1 2"], "old inner effect is gone")
     }
 }
 
@@ -491,10 +493,12 @@ struct Opaque {
 final class WrappedModel {
     @Signal var count = 0
     @Signal var opaque = Opaque()
-    @Computed var doubled: Int
+    let doubledRuns = Counter()
 
-    init() {
-        _doubled = Computed { [count = _count] in count.value * 2 }
+    @Computed
+    var doubled: Int {
+        doubledRuns.count += 1
+        return count * 2
     }
 }
 
@@ -515,7 +519,9 @@ func propertyWrappers() {
         scheduler.flush()
         #expect(seen == [0, 2, 4])
         #expect(model.$count.peek == 2)
-        #expect(model.$doubled.peek == 4)
+        #expect(model.doubled == 4)
+        #expect(model.$doubled.peek == 4, "$doubled is the Computed")
+        #expect(model.doubledRuns.count == 3, "cached between changes")
 
         var opaqueRuns = 0
         effect {
@@ -529,7 +535,7 @@ func propertyWrappers() {
 }
 
 @Test
-func wrappedComputedDoesNotRetainItsObject() {
+func computedMacroDoesNotRetainItsObject() {
     weak var freed: WrappedModel?
     do {
         let model = WrappedModel()
@@ -593,5 +599,38 @@ actor NotAnOwner {
 func actorThatIsntAnOwnerTraps() async {
     await #expect(processExitsWith: .failure) {
         await NotAnOwner().makeEffect()
+    }
+}
+
+final class ExternalModel {
+    let source: Signal<Int>
+
+    init(_ source: Signal<Int>) { self.source = source }
+
+    @Computed
+    var doubled: Int { source.value * 2 }
+}
+
+@Test
+func readingAComputedKeepsItsObjectAlive() {
+    withScheduler { scheduler in
+        let source = Signal(1)
+        weak var freed: ExternalModel?
+        var seen: [Int?] = []
+        var reader: Effect?
+        do {
+            let model = ExternalModel(source)
+            freed = model
+            reader = effect { [weak model] in seen.append(model?.doubled) }
+        }
+        #expect(freed != nil, "the reader links to model.doubled, which holds model")
+
+        // used to trap: the reader's checkDirty recomputed doubled after model was gone
+        source.value = 2
+        scheduler.flush()
+        #expect(seen == [2, 4])
+
+        reader?.stop()
+        #expect(freed == nil, "unwatched, it lets go")
     }
 }

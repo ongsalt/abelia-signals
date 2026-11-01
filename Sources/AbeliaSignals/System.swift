@@ -70,6 +70,9 @@ public class ReactiveNode {
 
     func unwatched() {}
 
+    // got its first subscriber
+    func watched() {}
+
     var subscriberCount: Int {
         var count = 0
         var link = subs
@@ -157,6 +160,7 @@ extension Unmanaged where Instance == ReactiveNode {
     }
     func update() -> Bool { _withUnsafeGuaranteedRef { $0.update() } }
     func unwatched() { _withUnsafeGuaranteedRef { $0.unwatched() } }
+    func watched() { _withUnsafeGuaranteedRef { $0.watched() } }
     static func === (a: Self, b: Self) -> Bool { a.toOpaque() == b.toOpaque() }
 }
 
@@ -184,7 +188,12 @@ func link(_ dep: ReactiveNode, _ sub: NodeRef, _ version: UInt64) {
     depRef.subsTail = newLink
     nextDep?.prevDep = newLink
     if let prevDep { prevDep.nextDep = newLink } else { sub.deps = newLink }
-    if let prevSub { prevSub.nextSub = newLink } else { depRef.subs = newLink }
+    if let prevSub {
+        prevSub.nextSub = newLink
+    } else {
+        depRef.subs = newLink
+        depRef.watched()
+    }
 }
 
 // removes `link` from both lists, then releases it, which can free its dep

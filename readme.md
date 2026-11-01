@@ -59,29 +59,34 @@ untrack { name.value }                  // reads in here don't subscribe
 - A computed nobody watches lets go of its sources and recomputes on its next read.
 - Effects created inside an effect are stopped before the parent re-runs.
 
-### Property wrappers
-
-`Signal` and `Computed` are also property wrappers:
+### `@Signal` and `@Computed` on classes
 
 ```swift
 final class Cart {
-    @Signal var count = 0            // same rules: Equatable values skip equal writes
-    @Computed var total: Double      // read-only, so it's set up in init
+    @Signal var count = 0            // a property wrapper: same rules as Signal
+    let price: Double
 
-    init(price: Double) {
-        _total = Computed { [count = _count] in Double(count.value) * price }
+    @Computed                        // a macro: cached until what it reads changes
+    var total: Double {
+        Double(count) * price
     }
+
+    init(price: Double) { self.price = price }
 }
 
 cart.count += 1                      // writes the signal
 cart.total                           // reads the computed, tracked
-cart.$count                          // the Signal itself
+cart.$count                          // the Signal itself, as visible as `count`
+cart.$total                          // the Computed itself, likewise
 ```
 
-Capture signals in computeds and effects, not `self`, or the object keeps itself alive
-through its own nodes. Inside `init` that means the backing `_count`, since `$count`
-counts as a use of `self` until every property is set. Outside `init`, `$count` is fine:
-`effect { [count = cart.$count] in … }`.
+`@Computed` needs a class, an explicit type and a read-only body written directly
+(`var x: T { … }`, not `get { }`). The body can use `self` as usual. Anything that reads
+the property (an effect, another computed) keeps the object alive, as a closure capturing
+it would; once nothing reads it, it doesn't, so the object is freed as usual.
+
+In effects, capture signals rather than `self`, or the object keeps itself alive through
+its own effects: `effect { [count = cart.$count] in … }`.
 
 ### Scopes
 
