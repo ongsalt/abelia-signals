@@ -4,15 +4,13 @@ Fine-grained reactivity for Swift: signals, lazy computeds and batched effects.
 The algorithm is ported from [alien-signals](https://github.com/stackblitz/alien-signals).
 
 ```swift
-@MainActor func setup() {
-    let count = Signal(0)
-    let doubled = Computed { count.value * 2 }
+let count = Signal(0)
+let doubled = Computed { count.value * 2 }
 
-    effect { print("count", count.value, "doubled", doubled.value) }   // prints now
+effect { print("count", count.value, "doubled", doubled.value) }   // prints now
 
-    count.value = 1
-    count.value = 2   // both writes land in one re-run, on the next main actor turn
-}
+count.value = 1
+count.value = 2   // both writes land in one re-run, on the next main actor turn
 ```
 
 ## Installation
@@ -110,6 +108,31 @@ let title = Computed.observing { model.title }   // invalidated when model.title
 
 Changes made on the computed's actor invalidate it synchronously. Changes from other
 threads hop onto that actor first.
+
+### Into Observation
+
+Observation reads signals through `Observed`, an `@Observable` mirror:
+
+```swift
+@MainActor final class Model {
+    @Signal var count = 0
+    let label: Observed<String>
+
+    init() {                         // not inside withObservationTracking
+        label = Observed { [count = _count] in "\(count.value) items" }
+    }
+}
+
+withObservationTracking { model.label.value } onChange: { … }
+```
+
+`compute` runs in an effect, so it updates `value` in the next flush and only when the
+result changed (by `==` when Equatable). Freeing the `Observed` stops it.
+
+Don't read signals or computeds directly inside `withObservationTracking`. A computed
+that isn't cached would recompute there: any `@Observable` it reads joins the
+subscription (Observation has no way to untrack), and a `Computed.observing` would nest
+tracking, which doesn't work.
 
 ## Schedulers
 

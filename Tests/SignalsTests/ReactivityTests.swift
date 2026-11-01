@@ -634,3 +634,59 @@ func readingAComputedKeepsItsObjectAlive() {
         #expect(freed == nil, "unwatched, it lets go")
     }
 }
+
+final class Flag: @unchecked Sendable {
+    var fired = false
+}
+
+// an Observation observer of `observed.value`
+func watch<Value>(_ observed: Observed<Value>) -> Flag {
+    let flag = Flag()
+    withObservationTracking({ _ = observed.value }, onChange: { flag.fired = true })
+    return flag
+}
+
+@Test
+func observedMirrorsIntoObservation() {
+    withScheduler { scheduler in
+        let a = Signal(1)
+        let doubled = Observed { a.value * 2 }
+        #expect(doubled.value == 2)
+
+        let flag = watch(doubled)
+        a.value = 2
+        #expect(doubled.value == 2 && !flag.fired, "updated in the flush, not on write")
+
+        scheduler.flush()
+        #expect(doubled.value == 4)
+        #expect(flag.fired)
+    }
+}
+
+@Test
+func observedSkipsEqualValues() {
+    withScheduler { scheduler in
+        let a = Signal(2)
+        let isEven = Observed { a.value % 2 == 0 }
+        let flag = watch(isEven)
+
+        a.value = 4
+        scheduler.flush()
+        #expect(!flag.fired, "still true: Observation isn't told")
+    }
+}
+
+@Test
+func freeingObservedStopsItsEffect() {
+    withScheduler { _ in
+        let a = Signal(1)
+        weak var freed: Observed<Int>?
+        do {
+            let doubled = Observed { a.value * 2 }
+            freed = doubled
+            #expect(a.subscriberCount == 1)
+        }
+        #expect(freed == nil)
+        #expect(a.subscriberCount == 0)
+    }
+}
