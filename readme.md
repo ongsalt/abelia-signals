@@ -209,26 +209,38 @@ scheduler.flush()
 
 ## Lifetimes
 
-There's no garbage collector, so ownership is explicit:
+There's no garbage collector, so ownership is explicit. The rule underneath: whatever
+reads a node keeps it alive, and a node never keeps its readers alive.
 
+- An effect or computed keeps the signals and computeds it read alive. A signal never
+  keeps its subscribers alive.
+- A computed lives while it's referenced or read. Once nothing reads it, it lets go of
+  its sources and recomputes on its next read.
+- A `@Computed` property: whatever reads it keeps its object alive, as a closure
+  capturing the object would. Once nothing reads it, it doesn't.
+- Dropping an `Effect` handle doesn't stop it. Call `stop()`, or let its owner (the
+  effect, computed or scope it was created in, or its scheduler) stop it.
+- An `EffectScope` created inside an effect or scope is owned by it. One at the top
+  level, or `detached`, stops when deinitialized. Freeing an `Observed` stops its effect.
 - A scheduler owns its top-level effects and stops them when it's freed. Effects and
-  scopes don't keep their scheduler alive.
-- Dropping an `Effect` handle doesn't stop it. Call `stop()`, or let its owner
-  (parent effect, scope or scheduler) stop it.
-- Effect bodies and `onCleanup` closures hold whatever they capture until the effect stops.
-- A signal never keeps its subscribers alive.
+  scopes don't keep it alive. `EffectScheduler.main` is never freed; an
+  `EffectSchedulerOwner` actor's scheduler is freed with the actor.
+- Effect bodies, computed bodies and `onCleanup` closures hold what they capture until
+  the effect stops or the computed is freed. Capture signals rather than `self` to
+  avoid an object keeping itself alive.
 
 ## Differences from JS signals
 
-| | JS (alien-signals, Preact, Solid) | AbeliaSignals |
+| | JS libraries | AbeliaSignals |
 |---|---|---|
-| Effect re-runs | Synchronous after a write, unless in a `batch` | Always batched into a flush. Only the first run is synchronous |
-| Threads | One global graph | A scheduler per serial executor. The graph isn't thread-safe, so use it from one executor |
-| Stopping effects | Freed when unreferenced | Explicit `stop()`, or stopped with their owner |
-| Equality | `Object.is` | `==` for `Equatable`, `equals:`, or always notify |
-| In-place mutation | `arr.push(x)` doesn't notify | `s.value.append(x)` notifies |
-| Syntax | `s()` / `s(v)` | `s.value` / `s.peek` |
-| Cleanup | Return a function, or `onCleanup` | `onCleanup { }` |
+| Effect re-runs | alien-signals, Preact: synchronously after each write, unless inside a batch. Svelte 5 and Vue batch them (a microtask, or before the next render) | Always batched into one flush per executor turn, like Svelte. Only the first run is synchronous |
+| Computeds | Lazy and cached, except Solid's `createMemo`, which is eager | Lazy and cached |
+| Threads | One single-threaded graph | A scheduler per serial executor. The graph isn't thread-safe, so use it from one executor |
+| Stopping effects | Call the dispose function `effect()` returns, or dispose its owner (a Solid root, a Vue `effectScope`, a Svelte component). Until then it stays subscribed, so it isn't garbage-collected | `stop()`, or stopped with its owner (an effect, scope or scheduler). An `EffectScope` also stops when deinitialized |
+| Equality | `!==` (alien-signals, Preact, Solid by default), `Object.is` (Vue). Objects compare by identity | `==` for `Equatable` (arrays compare by contents, in O(n)), `equals:`, or always notify |
+| In-place mutation | `arr.push(x)` doesn't notify in alien-signals, Preact or Solid. Vue's deep `ref` and Svelte 5's `$state` do, tracked per index and property | `s.value.append(x)` notifies, for the whole value |
+| Syntax | `s()` / `s(v)` (alien-signals), `s.value` (Preact, Vue), getter/setter pairs (Solid), plain variables (Svelte) | `s.value` / `s.peek`, like Preact's `.value` / `.peek()` |
+| Cleanup | Return a teardown function (alien-signals, Preact, Svelte), `onCleanup` (Solid), `onWatcherCleanup` (Vue) | `onCleanup { }` |
 
 ## Benchmarks
 
