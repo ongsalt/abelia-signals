@@ -3,7 +3,5 @@
   "swiftPM": {
     "buildSystem": "swiftbuild",
     "scratchPath": ".index-build"
-  },
-  "backgroundIndexing": true,
-  "backgroundPreparationMode": "build"
+  }
 }

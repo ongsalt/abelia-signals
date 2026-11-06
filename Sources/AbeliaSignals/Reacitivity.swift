@@ -181,17 +181,20 @@ extension Computed where T: Equatable {
 public final class Effect: EffectOwner, Sink {
     var souces: [any Source] = []
     var effect: () -> Void
+    var hasPendingRerun = false
 
+    @discardableResult
     public init(
-        flushing: Flushing,
-        isolation: isolated any Actor? = #isolation,
+        flushing: Flushing = .default,
+        isolation: any Actor? = #isolation,
         effect: @escaping () -> Void
     ) {
         self.effect = effect
-        super.init(detached: false, flushing: flushing)
+        super.init(detached: false, flushing: flushing, isolation: isolation)
 
         rerun()
     }
+
     func removeSources() {
         // TODO: optimize this
         for d in souces {
@@ -209,6 +212,8 @@ public final class Effect: EffectOwner, Sink {
         effect()
         currentEffectScope = prevScope
         currentSink = prevSink
+
+        hasPendingRerun = false
     }
 
     func trackRead(_ source: any Source) {
@@ -217,7 +222,10 @@ public final class Effect: EffectOwner, Sink {
     }
 
     func notify(direct _: Bool) {
-        flushingStrategy.schedule(self)
+        if !hasPendingRerun {
+            hasPendingRerun = true
+            flushingStrategy.schedule(self)
+        }
     }
 }
 
@@ -225,12 +233,14 @@ public class EffectOwner {
     weak var parent: EffectOwner?
     var children: [EffectOwner] = []
     let flushingStrategy: FlushingStrategy
+    let staticIsolation: any Actor?
 
     init(
         detached: Bool = false,
         flushing: Flushing,
-        isolation: isolated any Actor? = #isolation
+        isolation: any Actor?
     ) {
+        staticIsolation = isolation
         self.flushingStrategy = flushing.resolve(isolation)
         if let currentEffectScope, !detached {
             currentEffectScope.add(self)
@@ -252,10 +262,10 @@ public class EffectOwner {
 public final class EffectScope: EffectOwner {
     public override init(
         detached: Bool = false,
-        flushing: Flushing,
-        isolation: isolated any Actor? = #isolation
+        flushing: Flushing = .default,
+        isolation: any Actor? = #isolation
     ) {
-        super.init(detached: detached, flushing: flushing)
+        super.init(detached: detached, flushing: flushing, isolation: isolation)
     }
 
     public func run<T>(_ block: () -> T) -> T {

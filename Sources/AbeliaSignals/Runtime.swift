@@ -4,23 +4,25 @@ import Synchronization
 
 public class FlushScheduler {
     public var onFlushNeeded: (() -> Void) -> Void
+    var hasPendingFlush: Bool = false
     var pending: [Effect] = []
 
     // the callback passed in is `flush`. Schedule it as you see fit
-    public init(onFlushNeeded: @escaping (() -> Void) -> Void) {
+    public init(onFlushNeeded: @escaping (() -> Void) -> Void = { _ in}) {
         self.onFlushNeeded = onFlushNeeded
     }
 
     func add(_ effect: Effect) {
-        let shouldFlush = pending.isEmpty
         pending.append(effect)
 
-        if shouldFlush {
+        if !hasPendingFlush {
+            hasPendingFlush = true
             onFlushNeeded(flush)
         }
     }
 
     public func flush() {
+        hasPendingFlush = false
         for effect in pending {
             effect.rerun()
         }
@@ -29,29 +31,32 @@ public class FlushScheduler {
 }
 
 public enum Flushing {
-    // interop nicely with swift concurrency
+    /// Effect rerun in actor isolation. Current context must be isolated.
     case isolated
 
-    // Create a `FlushScheduler` then call `flush` yourself
+    /// Create a `FlushScheduler` then call `flush` yourself
     case manual(FlushScheduler)
 
-    // `Effect` will run immediately
+    /// `Effect` will run immediately
     case immediate
 
-    // Inherit from `EffectScope`
+    /// Inherit from `EffectScope`
     case inherit
 
+    /// `.inherit` then `.isolated`
     case `default`
 
     func resolve(_ isolation: any Actor?) -> FlushingStrategy {
         switch self {
         case .default:
-            if let isolation {
-                return .isolated(isolation)
-            } else if let currentEffectScope {
+            if let currentEffectScope {
                 return currentEffectScope.flushingStrategy
+            } else if let isolation {
+                return .isolated(isolation)
             } else {
-                fatalError("Current context is not isolated and there is no surrounding `EffectScope`. Please explicitly specify the `flushing` option.")
+                fatalError(
+                    "Current context is not isolated and there is no surrounding `EffectScope`. Try explicitly specify the `flushing` option or make a surrounding scope"
+                )
             }
         case .isolated:
             guard let isolation else {
@@ -118,7 +123,7 @@ private func scheduleFlush(_ effect: Effect, on isolation: any Actor) {
     }
 
     if shouldAddTask {
-        Task.immediate {
+        Task {
             // must yield or we deadlock
             await runOnActor(isolation) {
                 // flush everything
