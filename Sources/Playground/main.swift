@@ -7,9 +7,8 @@ let c = Computed {
     a.value + b.value
 }
 
-
 // effect with no scope WILL be dropped
-let e1 = Effect(flushing: .immediate) {
+let e1 = Effect.immediate {
     print("[immediate] \(c.value)")
 }
 
@@ -17,8 +16,8 @@ let e2 = Effect {
     print("[isolated] \(c.value)")
 }
 
-let scheduler = FlushScheduler()
-let e3 = Effect(flushing: .manual(scheduler)) {
+let scheduler = EffectScheduler()
+let e3 = Effect(scheduler: scheduler) {
     print("[manual] \(c.value)")
 }
 

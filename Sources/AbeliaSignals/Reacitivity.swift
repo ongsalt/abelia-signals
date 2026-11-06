@@ -183,16 +183,41 @@ public final class Effect: EffectOwner, Sink {
     var effect: () -> Void
     var hasPendingRerun = false
 
+    let flush: Flush
+
     @discardableResult
-    public init(
-        flushing: Flushing = .default,
+    public convenience init(
+        scheduler: EffectScheduler? = nil,
         isolation: any Actor? = #isolation,
         effect: @escaping () -> Void
     ) {
+        if let scheduler = scheduler ?? currentEffectScheduler {
+            self.init(flush: .scheduler(scheduler), effect: effect)
+        } else if let isolation {
+            print("select isolated")
+            if isolation !== MainActor.shared {
+                MainActor.preconditionIsolated()
+                self.init(flush: .scheduler(mainEffectScheduler), effect: effect)
+            } else {
+                self.init(flush: .isolated(isolation), effect: effect)
+            }
+        } else {
+            fatalError(
+                "No `EffectScheduler` are provided and current context is not isolated. You can also use `withEffectScheduler {}` to provide one."
+            )
+        }
+    }
+
+    init(flush: Flush, isolation: any Actor? = #isolation, effect: @escaping () -> Void) {
         self.effect = effect
-        super.init(detached: false, flushing: flushing, isolation: isolation)
+        self.flush = flush
+        super.init(detached: false, isolation: isolation)
 
         rerun()
+    }
+
+    public static func immediate(effect: @escaping () -> Void) -> Effect {
+        Effect(flush: .immediate, effect: effect)
     }
 
     func removeSources() {
@@ -224,7 +249,7 @@ public final class Effect: EffectOwner, Sink {
     func notify(direct _: Bool) {
         if !hasPendingRerun {
             hasPendingRerun = true
-            flushingStrategy.schedule(self)
+            flush.schedule(self)
         }
     }
 }
@@ -232,16 +257,13 @@ public final class Effect: EffectOwner, Sink {
 public class EffectOwner {
     weak var parent: EffectOwner?
     var children: [EffectOwner] = []
-    let flushingStrategy: FlushingStrategy
     let staticIsolation: any Actor?
 
     init(
         detached: Bool = false,
-        flushing: Flushing,
         isolation: any Actor?
     ) {
         staticIsolation = isolation
-        self.flushingStrategy = flushing.resolve(isolation)
         if let currentEffectScope, !detached {
             currentEffectScope.add(self)
         }
@@ -259,22 +281,47 @@ public class EffectOwner {
     }
 }
 
+/// must not be send across isolation domain
 public final class EffectScope: EffectOwner {
-    public override init(
+    var preferredScheduler: EffectScheduler? = nil
+
+    public init(
         detached: Bool = false,
-        flushing: Flushing = .default,
+        preferredScheduler: EffectScheduler? = nil,
         isolation: any Actor? = #isolation
     ) {
-        super.init(detached: detached, flushing: flushing, isolation: isolation)
+        self.preferredScheduler = preferredScheduler
+        super.init(detached: detached, isolation: isolation)
+
+        // or put this behavior in RootEffectScope
+        if let isolation, preferredScheduler == nil, parent == nil {
+            // create a default one
+            // is this safe tho
+            nonisolated(unsafe) let scheduler = EffectScheduler()
+            scheduler.onFlushNeeded = { _ in
+                Task {
+                    await runOnActor(isolation) {
+                        scheduler.flush()
+                    }
+                }
+            }
+            self.preferredScheduler = scheduler
+        }
     }
 
     public func run<T>(_ block: () -> T) -> T {
         let prev = currentEffectScope
         currentEffectScope = self
         defer { currentEffectScope = prev }
-        return block()
+
+        if let preferredScheduler {
+            return withEffectScheduler(preferredScheduler, body: block)
+        } else {
+            return block()
+        }
     }
 
+    /// release children reference
     public func dispose() {
         for c in children {
             c.parent = nil

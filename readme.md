@@ -11,7 +11,7 @@ let c = Computed {
 }
 
 // Effect without owner scope will be dropped if not explicitly reference
-Effect(flushing: .immediate) {
+Effect.immediate {
     print("[immediate] \(c.value)")
 }
 
@@ -19,15 +19,24 @@ Effect(flushing: .immediate) {
 let e = Effect {
     print("[isolated] \(c.value)")
 }
+
+let scope = EffectScope()
+scope.run {
+    // the scope will own this
+    Effect {
+        print("[owned] \(c.value)")
+    }
+}
+
+scope.dispose()
 ```
 
-
 ## Effect flushing
-`Effect` initialization must be either isolated OR has a parent `EffectScope` which is a thread local.
-
-`EffectScope` must speicify its flushing mode.
+`Effect` initialization must be either isolated or inside `withEffectScheduler` scope. `EffectScope` can provide this if `.preferredScheduler` is set. It is automatically set when the scope is root scope, is isolated and has no `preferredScheduler` passed in.
 
 # Todo
-- Effect: lifetime and disposal
+- effect disposal
 - threadlocal
-- [alien-signals](https://github.com/stackblitz/alien-signals) style dependency link
+- some kind of ordering gaurantee?
+- spam `@inlinable`, `@usableFromInline`, `@exclusivity(unchecked)`
+- [alien signals](https://github.com/stackblitz/alien-signals) style dependency link
