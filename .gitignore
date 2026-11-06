@@ -8,6 +8,7 @@ DerivedData/
 .netrc
 
 .sourcekit-lsp/
+.index-build/
 
 /Benchmarks/.build
 /Benchmarks/.results
