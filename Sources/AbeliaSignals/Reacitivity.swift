@@ -178,23 +178,20 @@ extension Computed where T: Equatable {
 }
 
 // TODO: make effect scope own this
-public final class Effect: _EffectScope, Sink {
+public final class Effect: EffectOwner, Sink {
     var souces: [any Source] = []
     var effect: () -> Void
 
-    public init(flushing: Flushing, effect: @escaping () -> Void) {
+    public init(
+        flushing: Flushing,
+        isolation: isolated any Actor? = #isolation,
+        effect: @escaping () -> Void
+    ) {
         self.effect = effect
         super.init(detached: false, flushing: flushing)
 
         rerun()
     }
-
-    public convenience init(
-        isolation: isolated any Actor = #isolation, effect: @escaping () -> Void
-    ) {
-        self.init(flushing: .isolated(isolation), effect: effect)
-    }
-
     func removeSources() {
         // TODO: optimize this
         for d in souces {
@@ -220,39 +217,59 @@ public final class Effect: _EffectScope, Sink {
     }
 
     func notify(direct _: Bool) {
-        flushing.schedule(self)
+        flushingStrategy.schedule(self)
     }
 }
 
-public class _EffectScope {
-    weak var parent: _EffectScope?
-    var children: [_EffectScope] = []
-    let flushing: Flushing
+public class EffectOwner {
+    weak var parent: EffectOwner?
+    var children: [EffectOwner] = []
+    let flushingStrategy: FlushingStrategy
 
-    public init(detached: Bool = false, flushing: Flushing) {
+    init(
+        detached: Bool = false,
+        flushing: Flushing,
+        isolation: isolated any Actor? = #isolation
+    ) {
+        self.flushingStrategy = flushing.resolve(isolation)
         if let currentEffectScope, !detached {
-            self.flushing = currentEffectScope.flushing
             currentEffectScope.add(self)
-        } else {
-            self.flushing = flushing
         }
+        // implicitly detached when there is no parent
     }
 
-    public convenience init(detached: Bool = false, isolation: isolated any Actor = #isolation) {
-        self.init(detached: detached, flushing: .isolated(isolation))
-    }
-
-    func add(_ child: _EffectScope) {
+    func add(_ child: EffectOwner) {
         children.append(child)
         child.parent = self
     }
+
+    func remove(child: EffectOwner) {
+        children = children.filter { $0 !== child }
+        child.parent = nil
+    }
 }
 
-public final class EffectScope: _EffectScope {
-    func run<T>(_ block: () -> T) -> T {
+public final class EffectScope: EffectOwner {
+    public override init(
+        detached: Bool = false,
+        flushing: Flushing,
+        isolation: isolated any Actor? = #isolation
+    ) {
+        super.init(detached: detached, flushing: flushing)
+    }
+
+    public func run<T>(_ block: () -> T) -> T {
         let prev = currentEffectScope
         currentEffectScope = self
         defer { currentEffectScope = prev }
         return block()
     }
+
+    public func dispose() {
+        for c in children {
+            c.parent = nil
+        }
+        children = []
+    }
+
 }

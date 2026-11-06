@@ -29,12 +29,55 @@ public class FlushScheduler {
 }
 
 public enum Flushing {
+    // interop nicely with swift concurrency
+    case isolated
+
+    // Create a `FlushScheduler` then call `flush` yourself
+    case manual(FlushScheduler)
+
+    // `Effect` will run immediately
+    case immediate
+
+    // Inherit from `EffectScope`
+    case inherit
+
+    case `default`
+
+    func resolve(_ isolation: any Actor?) -> FlushingStrategy {
+        switch self {
+        case .default:
+            if let isolation {
+                return .isolated(isolation)
+            } else if let currentEffectScope {
+                return currentEffectScope.flushingStrategy
+            } else {
+                fatalError("Current context is not isolated and there is no surrounding `EffectScope`. Please explicitly specify the `flushing` option.")
+            }
+        case .isolated:
+            guard let isolation else {
+                fatalError("flushing: .isolated is usable only in an isolated context.")
+            }
+            return .isolated(isolation)
+        case .manual(let scheduler):
+            return .manual(scheduler)
+        case .immediate:
+            return .immediate
+        case .inherit:
+            guard let currentEffectScope else {
+                fatalError("Can not inherit isolation: Parent scope not found.")
+            }
+            return currentEffectScope.flushingStrategy
+        }
+    }
+}
+
+public enum FlushingStrategy {
     case isolated(any Actor)
     case manual(FlushScheduler)
     case immediate
 }
 
-extension Flushing {
+extension FlushingStrategy {
     func schedule(_ effect: Effect) {
         switch self {
         case .immediate:
@@ -104,4 +147,4 @@ func runOnActor<A: Actor>(_ actor: isolated A, operation: () -> Void) {
 // MARK: threadlocal
 
 nonisolated(unsafe) var currentSink: Sink?
-nonisolated(unsafe) var currentEffectScope: _EffectScope?
+nonisolated(unsafe) var currentEffectScope: EffectOwner?
