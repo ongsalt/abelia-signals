@@ -35,8 +35,14 @@ scope.dispose()
 `Effect` initialization must be either isolated or inside `withEffectScheduler` scope. `EffectScope` can provide this if `.preferredScheduler` is set. It is automatically set when the scope is root scope, is isolated and has no `preferredScheduler` passed in.
 
 # Todo
-- effect disposal
+- effect disposal and `onDispose`
 - threadlocal
-- some kind of ordering gaurantee?
+
+## Optimization
 - spam `@inlinable`, `@usableFromInline`, `@exclusivity(unchecked)`
 - [alien signals](https://github.com/stackblitz/alien-signals) style dependency link
+
+## qol
+- propertyWrapper: `@Computed` property in a class that reference non signal field will make lifetime painful
+- some kind of ordering gaurantee?
+- observation

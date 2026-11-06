@@ -60,7 +60,6 @@ nonisolated(unsafe) var currentSink: Sink?
 nonisolated(unsafe) var currentEffectScope: EffectOwner?
 nonisolated(unsafe) var currentEffectScheduler: EffectScheduler?
 
-
 public func withEffectScheduler<T>(_ scheduler: EffectScheduler, body: () -> T) -> T {
     let prev = currentEffectScheduler
     currentEffectScheduler = scheduler

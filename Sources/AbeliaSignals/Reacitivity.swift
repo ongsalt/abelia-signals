@@ -47,6 +47,8 @@ public final class Signal<T>: Source<T> {
         }
     }
 
+    public var peek: T { _value }
+
     public init(_ value: T, equals: ((T, T) -> Bool)?) {
         self._value = value
         self.equals = equals
@@ -88,6 +90,11 @@ public final class Computed<T>: Source<T>, Sink {
     public var value: T {
         recomputeIfNeeded()
         currentSink?.trackRead(self)
+        return _value!
+    }
+
+    public var peek: T {
+        recomputeIfNeeded()
         return _value!
     }
 
@@ -330,3 +337,16 @@ public final class EffectScope: EffectOwner {
     }
 
 }
+
+func untrack<T>(_ body: () -> T) -> T {
+    let prev = currentSink
+    currentSink = nil
+    defer { currentSink = prev }
+    return body()
+}
+
+// extension Effect {
+//     static func onDispose() {
+
+//     }
+// }
