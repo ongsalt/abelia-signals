@@ -28,6 +28,7 @@ let currentId = Atomic<UInt64>(0)
 
 public final class Signal<T>: Source<T> {
     public let id = currentId.add(1, ordering: .relaxed).oldValue
+    @exclusivity(unchecked)
     var _value: T
     let equals: ((T, T) -> Bool)?
 
@@ -47,10 +48,11 @@ public final class Signal<T>: Source<T> {
             }
         }
 
-        _modify {
-            yield &_value
-            propagate()
-        }
+        // TODO: get around this
+        // _modify {
+        //     yield &_value
+        //     propagate()
+        // }
     }
 
     public var peek: T { _value }
@@ -95,6 +97,7 @@ public final class Computed<T>: Source<T>, Sink {
     let computation: () -> T
     let equals: ((T, T) -> Bool)?
 
+    @exclusivity(unchecked)
     var _value: T?
 
     public var value: T {
@@ -184,10 +187,11 @@ public final class Computed<T>: Source<T>, Sink {
         if direct {
             if state == .dirty { return }
             state = .dirty
+            if state == .maybe { return }
         } else {
             // if deps really change it will mark this thing dirty
             // if not it will either: no differences or not yet pulled
-            if state == .maybe { return }
+            if state == .maybe || state == .dirty { return }
             state = .maybe
         }
 
