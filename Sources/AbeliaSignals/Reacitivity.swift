@@ -1,5 +1,6 @@
 import Synchronization
 
+@usableFromInline
 protocol Source<T>: AnyObject, Identifiable<UInt64> {
     associatedtype T
     // only use for compute state `.maybe` checking
@@ -12,17 +13,21 @@ protocol Source<T>: AnyObject, Identifiable<UInt64> {
     func updateIfNeeded()
 }
 
+@usableFromInline
 protocol Sink: AnyObject, Identifiable<UInt64> {
     func trackRead(_ source: any Source)
     func notify(direct: Bool)
 }
 
 struct WeakSink {
+    init(sink: any Sink) { self.sink = sink }
+
     weak var sink: any Sink?
     /// number of slots in the sink's `sources` that point at this source
     var count: Int = 1
 }
 
+@usableFromInline
 enum State {
     case dirty
     case maybe
@@ -34,12 +39,16 @@ let currentId = Atomic<UInt64>(0)
 public final class Signal<T>: Source<T> {
     public let id = currentId.add(1, ordering: .relaxed).oldValue
     @exclusivity(unchecked)
+    @usableFromInline
     var _value: T
+    @usableFromInline
     let equals: ((T, T) -> Bool)?
 
     var sinks: [UInt64: WeakSink] = [:]
+    @usableFromInline
     var state: State { .clean }
 
+    @inlinable
     public var value: T {
         get {
             currentSink?.trackRead(self)
@@ -60,19 +69,21 @@ public final class Signal<T>: Source<T> {
         // }
     }
 
+    @inlinable
     public var peek: T { _value }
 
     // a changed signal marks its sinks `.dirty` directly, so there is nothing to pull
+    @usableFromInline
     func updateIfNeeded() {}
 
+    @inlinable
     public init(_ value: T, equals: ((T, T) -> Bool)?) {
         self._value = value
         self.equals = equals
     }
 
+    @usableFromInline
     func propagate() {
-        // ordering shouldnt be guaranteed?
-
         // this job can be queued + dedup
         sinks = sinks.filter { $0.value.sink != nil }
         for d in sinks {
@@ -80,6 +91,7 @@ public final class Signal<T>: Source<T> {
         }
     }
 
+    @usableFromInline
     func removeSink(_ sink: any Sink) {
         guard let entry = sinks[sink.id] else { return }
         if entry.count <= 1 {
@@ -89,6 +101,7 @@ public final class Signal<T>: Source<T> {
         }
     }
 
+    @usableFromInline
     func addSink(_ sink: any Sink) {
         if sinks[sink.id] != nil {
             sinks[sink.id]!.count += 1
@@ -99,6 +112,7 @@ public final class Signal<T>: Source<T> {
 }
 
 extension Signal where T: Equatable {
+    @inlinable
     public convenience init(_ value: T) {
         self.init(value, equals: ==)
     }
@@ -107,32 +121,40 @@ extension Signal where T: Equatable {
 public final class Computed<T>: Source<T>, Sink {
     public let id = currentId.add(1, ordering: .relaxed).oldValue
 
+    @usableFromInline
     var state: State = .dirty
     var sources: [any Source] = []
     var sinks: [UInt64: WeakSink] = [:]
 
+    @usableFromInline
     let computation: () -> T
+    @usableFromInline
     let equals: ((T, T) -> Bool)?
 
     @exclusivity(unchecked)
+    @usableFromInline
     var _value: T?
 
+    @inlinable
     public var value: T {
         updateIfNeeded()
         currentSink?.trackRead(self)
         return _value!
     }
 
+    @inlinable
     public var peek: T {
         updateIfNeeded()
         return _value!
     }
 
+    @inlinable
     public init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
         self.computation = computation
         self.equals = equals
     }
 
+    @usableFromInline
     func updateIfNeeded() {
         switch state {
         case .clean: break
@@ -173,6 +195,7 @@ public final class Computed<T>: Source<T>, Sink {
         }
     }
 
+    @usableFromInline
     func trackRead(_ source: any Source) {
         // dedup
         if currentTrackingIndex > 0, sources[currentTrackingIndex - 1] === source { return }
@@ -198,6 +221,7 @@ public final class Computed<T>: Source<T>, Sink {
         }
     }
 
+    @usableFromInline
     func notify(direct: Bool) {
         if direct {
             if state == .dirty { return }
@@ -213,6 +237,7 @@ public final class Computed<T>: Source<T>, Sink {
         propagate(direct: false)
     }
 
+    @usableFromInline
     func removeSink(_ sink: any Sink) {
         guard let entry = sinks[sink.id] else { return }
         if entry.count <= 1 {
@@ -222,6 +247,7 @@ public final class Computed<T>: Source<T>, Sink {
         }
     }
 
+    @usableFromInline
     func addSink(_ sink: any Sink) {
         if sinks[sink.id] != nil {
             sinks[sink.id]!.count += 1
@@ -232,6 +258,7 @@ public final class Computed<T>: Source<T>, Sink {
 }
 
 extension Computed where T: Equatable {
+    @inlinable
     public convenience init(_ computation: @escaping () -> T) {
         self.init(computation, equals: ==)
     }
@@ -321,6 +348,7 @@ public final class Effect: EffectOwner, Sink {
 
     }
 
+    @usableFromInline
     func trackRead(_ source: any Source) {
         if currentTrackingIndex > 0, sources[currentTrackingIndex - 1] === source { return }
 
@@ -339,6 +367,7 @@ public final class Effect: EffectOwner, Sink {
         self.currentTrackingIndex += 1
     }
 
+    @usableFromInline
     func notify(direct: Bool) {
         if direct { isDirty = true }
         if !hasPendingRerun {

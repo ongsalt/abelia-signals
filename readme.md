@@ -36,30 +36,78 @@ scope.dispose()
 
 
 # Benchmark
+Same suite on three implementations (`median`, release build, same machine):
+- **abelia**: this library
+- **alien-signals (swift)**: `Sources/AlienSignals`, a line-by-line port of alien-signals in plain Swift (no `Unmanaged`, `@inlinable` or `@exclusivity`). Same algorithm, so it shows what the *language* costs
+- **alien-signals (node)**: the original, via `bench-js/`
 
+| case | abelia | alien (swift) | alien (node) |
+|---|---|---|---|
+| signal read (untracked) | 2.8 ns | 12.6 ns | 2.2 ns |
+| signal write (0 subscribers) | 31.9 ns | 87.8 ns | 14.6 ns |
+| signal write (100 subscribers) | 13.0 µs | 2.5 µs | 427 ns |
+| deep chain ×1000 | 816 µs | 295 µs | 37.9 µs |
+| fan-out 1→1000 computeds | 321 µs | 231 µs | 31.5 µs |
+| diamond 1→2→1 | 1.4 µs | 948 ns | 132 ns |
+| wide diamond 1→100→1 | 65.4 µs | 28.5 µs | 4.4 µs |
+| layered grid 10×100 | 89.4 µs | 27.6 µs | 4.3 µs |
+
+- abelia / alien (swift) = **algorithm** (same language): ~1.3–3.4×, 5× on wide notify
+- alien (swift) / alien (node) = **language** (same algorithm): ~3–8×
+- primitives aren't apples to apples: alien reads also commit a pending (batched) write
+
+## abelia
 ```
-prim/signal read (untracked)                 4.7 ns       4.7 ns       10580628
-prim/signal peek                             4.0 ns       3.9 ns       12640248
-prim/signal read (tracked, 1×)               362.1 ns     355.9 ns     134757
-prim/signal read (tracked, same ×100)        3.8 µs       3.7 µs       12821
-prim/signal write (same value, equals cutoff) 11.7 ns      11.4 ns      4311348
-prim/signal write (0 subscribers)            46.4 ns      45.5 ns      1082568
-prim/signal write (1 subscribers)            161.2 ns     158.6 ns     297104
-prim/signal write (10 subscribers)           1.3 µs       1.3 µs       37468
-prim/signal write (100 subscribers)          12.4 µs      12.3 µs      3970
-prim/create Signal                           47.3 ns      46.6 ns      1055982
-prim/create Computed + first read            581.8 ns     502.7 ns     110881
-prim/create Effect.immediate                 510.8 ns     465.8 ns     121133
-shape/deep chain ×10                         7.1 µs       6.7 µs       7495
-shape/deep chain ×100                        76.7 µs      76.0 µs      647
-shape/deep chain ×1000                       784.2 µs     774.9 µs     63
-shape/fan-out 1→1000 computeds (read all)    316.4 µs     306.5 µs     156
-shape/fan-out 1→1000 effects (immediate)     222.9 µs     221.8 µs     224
-shape/fan-in 1000→1 (write one)              45.2 µs      45.0 µs      1075
-shape/diamond 1→2→1                          1.4 µs       1.4 µs       34560
-shape/wide diamond 1→100→1                   64.7 µs      62.9 µs      775
-shape/layered grid 10×100                    86.9 µs      85.4 µs      574
-shape/dynamic deps (switch 50↔50)            12.8 µs      12.4 µs      3929
+benchmark                                    median       min          iters/sample
+prim/signal read (untracked)                 2.8 ns       2.8 ns       14252346
+prim/signal peek                             1.4 ns       1.4 ns       36193885
+prim/signal read (tracked, 1×)               337.1 ns     336.2 ns     147430
+prim/signal read (tracked, same ×100)        3.1 µs       3.1 µs       16428
+prim/signal write (same value, equals cutoff) 3.1 ns       3.0 ns       16175289
+prim/signal write (0 subscribers)            31.9 ns      31.8 ns      1565802
+prim/signal write (1 subscribers)            158.4 ns     158.1 ns     315344
+prim/signal write (10 subscribers)           1.3 µs       1.3 µs       37743
+prim/signal write (100 subscribers)          13.0 µs      13.0 µs      3880
+prim/create Signal                           21.4 ns      21.3 ns      2338240
+prim/create Computed + first read            617.9 ns     547.7 ns     105089
+prim/create Effect.immediate                 494.0 ns     430.6 ns     136549
+shape/deep chain ×10                         7.0 µs       7.0 µs       7181
+shape/deep chain ×100                        79.9 µs      78.8 µs      635
+shape/deep chain ×1000                       816.3 µs     813.4 µs     60
+shape/fan-out 1→1000 computeds (read all)    320.8 µs     320.0 µs     155
+shape/fan-out 1→1000 effects (immediate)     222.5 µs     218.3 µs     229
+shape/fan-in 1000→1 (write one)              38.1 µs      38.0 µs      1319
+shape/diamond 1→2→1                          1.4 µs       1.4 µs       34590
+shape/wide diamond 1→100→1                   65.4 µs      64.8 µs      759
+shape/layered grid 10×100                    89.4 µs      89.0 µs      550
+shape/dynamic deps (switch 50↔50)            12.3 µs      12.3 µs      4049
+```
+
+## alien-signals (swift port)
+```
+benchmark                                    median       min          iters/sample
+prim/signal read (untracked)                 12.6 ns      12.3 ns      3835614
+prim/signal peek                             12.0 ns      11.7 ns      3966973
+prim/signal read (tracked, 1×)               359.9 ns     350.8 ns     142635
+prim/signal read (tracked, same ×100)        2.3 µs       2.2 µs       21692
+prim/signal write (same value, equals cutoff) 17.1 ns      17.0 ns      2911377
+prim/signal write (0 subscribers)            87.8 ns      87.3 ns      570039
+prim/signal write (1 subscribers)            121.5 ns     121.4 ns     414347
+prim/signal write (10 subscribers)           327.0 ns     324.1 ns     153513
+prim/signal write (100 subscribers)          2.5 µs       2.4 µs       21043
+prim/create Signal                           28.3 ns      28.3 ns      1763890
+prim/create Computed + first read            217.0 ns     216.3 ns     228795
+prim/create Effect.immediate                 135.6 ns     134.6 ns     368131
+shape/deep chain ×10                         3.0 µs       2.9 µs       17266
+shape/deep chain ×100                        29.3 µs      29.1 µs      1692
+shape/deep chain ×1000                       294.7 µs     293.5 µs     166
+shape/fan-out 1→1000 computeds (read all)    231.1 µs     228.9 µs     207
+shape/fan-out 1→1000 effects (immediate)     150.1 µs     149.1 µs     335
+shape/fan-in 1000→1 (write one)              35.8 µs      34.5 µs      1488
+shape/diamond 1→2→1                          947.6 ns     933.7 ns     53499
+shape/wide diamond 1→100→1                   28.5 µs      28.1 µs      1751
+shape/layered grid 10×100                    27.6 µs      27.5 µs      1818
+shape/dynamic deps (switch 50↔50)            5.8 µs       5.8 µs       8635
 ```
 
 ## alien-signals (node)
@@ -92,7 +140,8 @@ shape/dynamic deps (switch 50↔50)            1.9 µs       1.8 µs       26354
 
 ## Running it
 ```sh
-swift run -c release Benchmark [check|<filter>]   # Swift
+swift run -c release Benchmark [check|<filter>]        # abelia
+swift run -c release BenchmarkAlien [check|<filter>]   # alien-signals swift port, same suite
 cd bench-js && npm i && npm run bench             # same suite on alien-signals (Node)
 cd bench-js && npm run bench:bun                  # ... or Bun
 ```
@@ -102,11 +151,14 @@ cd bench-js && npm run bench:bun                  # ... or Bun
 - threadlocal c shim
 
 ## Bugs
-- `Effect.immediate` see glitched state
+- `Effect.immediate` see glitched state. So we still need to batch this: wrap aroudn signal mutation call. then `batch {}` is neutral.
 
 ## Optimization
-- spam `@inlinable`, `@usableFromInline`, `@exclusivity(unchecked)`
+- ~~spam `@inlinable`, `@usableFromInline`~~ done, only on the typed public API (`value`, `peek`, inits): primitives 1.5–3× faster. Inlining the graph internals too made chains/effects slower
+- `@exclusivity(unchecked)`: partly done
+- plain struct + pointer
 - [alien signals](https://github.com/stackblitz/alien-signals) style dependency link
+
 
 ## qol
 - propertyWrapper: `@Computed` property in a class that reference non signal field will make lifetime painful

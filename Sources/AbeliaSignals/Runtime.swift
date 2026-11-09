@@ -56,6 +56,7 @@ func runOnActor<A: Actor>(_ actor: isolated A, operation: () -> Void) {
 
 // MARK: threadlocal
 // TODO
+@usableFromInline
 nonisolated(unsafe) var currentSink: Sink?
 nonisolated(unsafe) var currentEffectScope: EffectOwner?
 nonisolated(unsafe) var currentEffectScheduler: EffectScheduler?
