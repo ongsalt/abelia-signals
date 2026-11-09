@@ -27,6 +27,17 @@ let package = Package(
             ],
         ),
 
+        .executableTarget(
+            name: "Benchmark",
+            dependencies: [
+                "AbeliaSignals"
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+                .enableExperimentalFeature("Lifetimes"),
+            ],
+        ),
+
         // .testTarget(
         //     name: "AbeliaSignalsTests",
         //     dependencies: ["AbeliaSignals"]

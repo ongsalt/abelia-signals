@@ -36,7 +36,13 @@ scope.dispose()
 
 # Todo
 - effect disposal and `onDispose`
-- threadlocal
+- threadlocal c shim
+
+## Bugs
+- `Effect.immediate` see glitched state
+-  The same dependency is tracked more than once
+- .maybe state never short-circuits
+
 
 ## Optimization
 - spam `@inlinable`, `@usableFromInline`, `@exclusivity(unchecked)`
@@ -44,5 +50,5 @@ scope.dispose()
 
 ## qol
 - propertyWrapper: `@Computed` property in a class that reference non signal field will make lifetime painful
-- some kind of ordering gaurantee?
 - observation
+- some kind of ordering gaurantee?

@@ -19,6 +19,26 @@
             "target": "Playground",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release Playground"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:abelia-signals}",
+            "name": "Debug Benchmark",
+            "target": "Benchmark",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Benchmark"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:abelia-signals}",
+            "name": "Release Benchmark",
+            "target": "Benchmark",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Benchmark"
         }
     ]
 }
