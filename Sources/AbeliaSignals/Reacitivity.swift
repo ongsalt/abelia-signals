@@ -44,6 +44,7 @@ public final class Signal<T>: Source<T> {
     @usableFromInline
     let equals: ((T, T) -> Bool)?
 
+    // must be fast to remove, randomly
     var sinks: [UInt64: WeakSink] = [:]
     @usableFromInline
     var state: State { .clean }
@@ -85,9 +86,9 @@ public final class Signal<T>: Source<T> {
     @usableFromInline
     func propagate() {
         // this job can be queued + dedup
-        sinks = sinks.filter { $0.value.sink != nil }
+        // dead (deallocated) sinks are skipped, not removed
         for d in sinks {
-            d.value.sink!.notify(direct: true)
+            d.value.sink?.notify(direct: true)
         }
     }
 
@@ -174,7 +175,6 @@ public final class Computed<T>: Source<T>, Sink {
         }
     }
 
-    // nil mean reusing fail
     var currentTrackingIndex: Int = 0
     func recompute() {
         currentTrackingIndex = 0
@@ -215,9 +215,9 @@ public final class Computed<T>: Source<T>, Sink {
     }
 
     func propagate(direct: Bool) {
-        sinks = sinks.filter { $0.value.sink != nil }
+        // dead (deallocated) sinks are skipped, not removed
         for d in sinks {
-            d.value.sink!.notify(direct: direct)
+            d.value.sink?.notify(direct: direct)
         }
     }
 
