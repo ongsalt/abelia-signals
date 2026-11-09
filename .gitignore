@@ -9,6 +9,7 @@ DerivedData/
 
 /.index-build
 /.build-bench
+/.build-asan
 
 perf.data
 perf.data.old
