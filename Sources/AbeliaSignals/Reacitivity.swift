@@ -89,7 +89,7 @@ public final class Computed<T>: Source<T>, Sink {
     public let id = currentId.add(1, ordering: .relaxed).oldValue
 
     var state: State = .dirty
-    var souces: [any Source] = []
+    var sources: [any Source] = []
     var sinks: [UInt64: WeakSink] = [:]
 
     let computation: () -> T
@@ -123,7 +123,7 @@ public final class Computed<T>: Source<T>, Sink {
             state = .clean
             // if deps is all clean then no one notify us then we must be clean
             // Bug: wont work if `source` is .maybe
-            if souces.allSatisfy({ $0.state == .clean }) {
+            if sources.allSatisfy({ $0.state == .clean }) {
                 return
             }
 
@@ -131,13 +131,20 @@ public final class Computed<T>: Source<T>, Sink {
         }
     }
 
+    // nil mean reusing fail
+    var currentTrackingIndex: Int = 0
     func recompute() {
-        removeSources()
-
+        currentTrackingIndex = 0
         let prev = currentSink
         currentSink = self
         let newValue = computation()
         currentSink = prev
+
+        // unlink everything after currentTrackingIndex
+        for _ in currentTrackingIndex..<sources.count {
+            let prev = sources.removeLast()
+            prev.removeSink(self)
+        }
 
         if _value == nil || equals == nil || !equals!(newValue, _value!) {
             _value = newValue
@@ -145,18 +152,25 @@ public final class Computed<T>: Source<T>, Sink {
         }
     }
 
-    func removeSources() {
-        // TODO: optimize this
-        for d in souces {
-            d.removeSink(self)
-        }
-        souces = []
-    }
-
     func trackRead(_ source: any Source) {
-        // should actually overwrite in place
-        self.souces.append(source)
-        source.addSink(self)
+        if sources.last === source {
+            return
+        }
+
+        // larger than before
+        if currentTrackingIndex >= sources.count {
+            sources.append(source)
+            source.addSink(self)
+            self.currentTrackingIndex += 1
+        } else if sources[currentTrackingIndex] === source {
+            self.currentTrackingIndex += 1
+        } else {
+            // overwrite
+            let prev = sources[currentTrackingIndex]
+            prev.removeSink(self)
+            sources[currentTrackingIndex] = source
+            source.addSink(self)
+        }
     }
 
     func propagate(direct: Bool) {
@@ -199,7 +213,7 @@ extension Computed where T: Equatable {
 public final class Effect: EffectOwner, Sink {
     public let id = currentId.add(1, ordering: .relaxed).oldValue
 
-    var souces: [any Source] = []
+    var sources: [any Source] = []
     var effect: () -> Void
     var hasPendingRerun = false
 
@@ -240,16 +254,9 @@ public final class Effect: EffectOwner, Sink {
         Effect(flush: .immediate, effect: effect)
     }
 
-    func removeSources() {
-        // TODO: optimize this
-        for d in souces {
-            d.removeSink(self)
-        }
-        souces = []
-    }
-
+    var currentTrackingIndex: Int = 0
     func rerun() {
-        removeSources()
+
         let prevSink = currentSink
         let prevScope = currentEffectScope
         currentSink = self
@@ -259,11 +266,33 @@ public final class Effect: EffectOwner, Sink {
         currentSink = prevSink
 
         hasPendingRerun = false
+
+        for _ in currentTrackingIndex..<sources.count {
+            let prev = sources.removeLast()
+            prev.removeSink(self)
+        }
+
     }
 
     func trackRead(_ source: any Source) {
-        self.souces.append(source)
-        source.addSink(self)
+        if sources.last === source {
+            return
+        }
+
+        // larger than before
+        if currentTrackingIndex >= sources.count {
+            sources.append(source)
+            source.addSink(self)
+            self.currentTrackingIndex += 1
+        } else if sources[currentTrackingIndex] === source {
+            self.currentTrackingIndex += 1
+        } else {
+            // overwrite
+            let prev = sources[currentTrackingIndex]
+            prev.removeSink(self)
+            sources[currentTrackingIndex] = source
+            source.addSink(self)
+        }
     }
 
     func notify(direct _: Bool) {
