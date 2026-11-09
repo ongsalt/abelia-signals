@@ -16,6 +16,8 @@ protocol Sink: AnyObject, Identifiable<UInt64> {
 
 struct WeakSink {
     weak var sink: any Sink?
+    /// number of slots in the sink's `sources` that point at this source
+    var count: Int = 1
 }
 
 enum State {
@@ -73,11 +75,20 @@ public final class Signal<T>: Source<T> {
     }
 
     func removeSink(_ sink: any Sink) {
-        sinks[sink.id] = nil
+        guard let entry = sinks[sink.id] else { return }
+        if entry.count <= 1 {
+            sinks[sink.id] = nil
+        } else {
+            sinks[sink.id]!.count -= 1
+        }
     }
 
     func addSink(_ sink: any Sink) {
-        sinks[sink.id] = WeakSink(sink: sink)
+        if sinks[sink.id] != nil {
+            sinks[sink.id]!.count += 1
+        } else {
+            sinks[sink.id] = WeakSink(sink: sink)
+        }
     }
 }
 
@@ -156,24 +167,21 @@ public final class Computed<T>: Source<T>, Sink {
     }
 
     func trackRead(_ source: any Source) {
-        if sources.last === source {
-            return
-        }
+        // dedup
+        if currentTrackingIndex > 0, sources[currentTrackingIndex - 1] === source { return }
 
         // larger than before
         if currentTrackingIndex >= sources.count {
             sources.append(source)
             source.addSink(self)
-            self.currentTrackingIndex += 1
-        } else if sources[currentTrackingIndex] === source {
-            self.currentTrackingIndex += 1
-        } else {
+        } else if sources[currentTrackingIndex] !== source {
             // overwrite
-            let prev = sources[currentTrackingIndex]
-            prev.removeSink(self)
+            sources[currentTrackingIndex].removeSink(self)
             sources[currentTrackingIndex] = source
             source.addSink(self)
         }
+
+        self.currentTrackingIndex += 1
     }
 
     func propagate(direct: Bool) {
@@ -199,11 +207,20 @@ public final class Computed<T>: Source<T>, Sink {
     }
 
     func removeSink(_ sink: any Sink) {
-        sinks[sink.id] = nil
+        guard let entry = sinks[sink.id] else { return }
+        if entry.count <= 1 {
+            sinks[sink.id] = nil
+        } else {
+            sinks[sink.id]!.count -= 1
+        }
     }
 
     func addSink(_ sink: any Sink) {
-        sinks[sink.id] = WeakSink(sink: sink)
+        if sinks[sink.id] != nil {
+            sinks[sink.id]!.count += 1
+        } else {
+            sinks[sink.id] = WeakSink(sink: sink)
+        }
     }
 }
 
@@ -260,6 +277,7 @@ public final class Effect: EffectOwner, Sink {
 
     var currentTrackingIndex: Int = 0
     func rerun() {
+        currentTrackingIndex = 0
 
         let prevSink = currentSink
         let prevScope = currentEffectScope
@@ -279,24 +297,21 @@ public final class Effect: EffectOwner, Sink {
     }
 
     func trackRead(_ source: any Source) {
-        if sources.last === source {
-            return
-        }
+        if currentTrackingIndex > 0, sources[currentTrackingIndex - 1] === source { return }
 
         // larger than before
         if currentTrackingIndex >= sources.count {
             sources.append(source)
             source.addSink(self)
-            self.currentTrackingIndex += 1
-        } else if sources[currentTrackingIndex] === source {
-            self.currentTrackingIndex += 1
-        } else {
+        } else if sources[currentTrackingIndex] !== source {
             // overwrite
             let prev = sources[currentTrackingIndex]
             prev.removeSink(self)
             sources[currentTrackingIndex] = source
             source.addSink(self)
         }
+
+        self.currentTrackingIndex += 1
     }
 
     func notify(direct _: Bool) {

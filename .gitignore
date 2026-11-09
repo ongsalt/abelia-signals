@@ -8,7 +8,7 @@ DerivedData/
 .netrc
 
 /.index-build
-/.build-cli
+/.build-bench
 
 perf.data
 perf.data.old

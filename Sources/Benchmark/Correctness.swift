@@ -146,6 +146,104 @@ func runChecks() {
         return runs
     }
 
+    // MARK: value checks — a disconnected graph must not pass as "fast"
+
+    check("still live: deep chain ×100 value after 5 writes", expected: 105) {
+        let head = Signal(0)
+        var node = Computed { head.value &+ 1 }
+        for _ in 1..<100 {
+            let p = node
+            node = Computed { p.value &+ 1 }
+        }
+        for _ in 0..<5 {
+            head.value += 1
+            blackHole(node.value)
+        }
+        return node.value
+    }
+
+    check("still live: diamond value after 5 writes", expected: 5 + 1 + 5 * 2) {
+        let a = Signal(0)
+        let b = Computed { a.value &+ 1 }
+        let c = Computed { a.value &* 2 }
+        let d = Computed { b.value &+ c.value }
+        for _ in 0..<5 {
+            a.value += 1
+            blackHole(d.value)
+        }
+        return d.value
+    }
+
+    check("still live: fan-out 1→100 sum after 5 writes", expected: 100 * 5) {
+        let s = Signal(0)
+        let subs = (0..<100).map { _ in Computed { s.value } }
+        for _ in 0..<5 {
+            s.value += 1
+            for c in subs { blackHole(c.value) }
+        }
+        return subs.reduce(0) { $0 &+ $1.value }
+    }
+
+    check("still live: effect reruns on each of 5 writes", expected: 5) {
+        let a = Signal(0)
+        var runs = 0
+        let e = Effect.immediate { runs += 1; blackHole(a.value) }
+        runs = 0
+        for _ in 0..<5 { a.value += 1 }
+        blackHole(e)
+        return runs
+    }
+
+    check("deps reorder [a, b] → [b, a]: still reacts to b", expected: 1) {
+        let flip = Signal(false)
+        let a = Signal(0)
+        let b = Signal(0)
+        var runs = 0
+        let c = Computed {
+            runs += 1
+            return flip.value ? b.value &+ a.value : a.value &+ b.value
+        }
+        blackHole(c.value)
+        flip.value = true
+        blackHole(c.value)
+        runs = 0
+        b.value += 1
+        blackHole(c.value)
+        return runs
+    }
+
+    check("deps shrink [a, a] → [a]: still reacts to a", expected: 1) {
+        let twice = Signal(true)
+        let a = Signal(0)
+        let other = Signal(0)
+        var runs = 0
+        let c = Computed {
+            runs += 1
+            // reads a, other, a (non-adjacent duplicate), then just a
+            return twice.value ? a.value &+ other.value &+ a.value : a.value
+        }
+        blackHole(c.value)
+        twice.value = false
+        blackHole(c.value)
+        runs = 0
+        a.value += 1
+        blackHole(c.value)
+        return runs
+    }
+
+    check("effect dynamic deps: stale branch no longer triggers rerun", expected: 0) {
+        let flag = Signal(true)
+        let x = Signal(0)
+        let y = Signal(0)
+        var runs = 0
+        let e = Effect.immediate { runs += 1; blackHole(flag.value ? x.value : y.value) }
+        flag.value = false
+        runs = 0
+        x.value += 1
+        blackHole(e)
+        return runs
+    }
+
     print("check                                                                    expected  actual")
     var failed = 0
     for c in checks {
