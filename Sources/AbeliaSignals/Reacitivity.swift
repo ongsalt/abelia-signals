@@ -1,4 +1,6 @@
-protocol Source<T>: AnyObject {
+import Synchronization
+
+protocol Source<T>: AnyObject, Identifiable<UInt64> {
     associatedtype T
     // only use for compute state `.maybe` checking
     var state: State { get }
@@ -7,7 +9,7 @@ protocol Source<T>: AnyObject {
     func removeSink(_ sink: any Sink)
 }
 
-protocol Sink: AnyObject {
+protocol Sink: AnyObject, Identifiable<UInt64> {
     func trackRead(_ source: any Source)
     func notify(direct: Bool)
 }
@@ -22,10 +24,14 @@ enum State {
     case clean
 }
 
+let currentId = Atomic<UInt64>(0)
+
 public final class Signal<T>: Source<T> {
+    public let id = currentId.add(1, ordering: .relaxed).oldValue
     var _value: T
     let equals: ((T, T) -> Bool)?
-    var sinks: [WeakSink] = []
+
+    var sinks: [UInt64: WeakSink] = [:]
     var state: State { .clean }
 
     public var value: T {
@@ -56,18 +62,20 @@ public final class Signal<T>: Source<T> {
 
     func propagate() {
         // ordering shouldnt be guaranteed?
-        sinks = sinks.filter { $0.sink != nil }
+
+        // this job can be queued + dedup
+        sinks = sinks.filter { $0.value.sink != nil }
         for d in sinks {
-            d.sink!.notify(direct: true)
+            d.value.sink!.notify(direct: true)
         }
     }
 
     func removeSink(_ sink: any Sink) {
-        sinks = sinks.filter { $0.sink != nil && $0.sink !== sink }
+        sinks[sink.id] = nil
     }
 
     func addSink(_ sink: any Sink) {
-        sinks.append(WeakSink(sink: sink))
+        sinks[sink.id] = WeakSink(sink: sink)
     }
 }
 
@@ -78,9 +86,11 @@ extension Signal where T: Equatable {
 }
 
 public final class Computed<T>: Source<T>, Sink {
+    public let id = currentId.add(1, ordering: .relaxed).oldValue
+
     var state: State = .dirty
     var souces: [any Source] = []
-    var sinks: [WeakSink] = []
+    var sinks: [UInt64: WeakSink] = [:]
 
     let computation: () -> T
     let equals: ((T, T) -> Bool)?
@@ -112,6 +122,7 @@ public final class Computed<T>: Source<T>, Sink {
         case .maybe:
             state = .clean
             // if deps is all clean then no one notify us then we must be clean
+            // Bug: wont work if `source` is .maybe
             if souces.allSatisfy({ $0.state == .clean }) {
                 return
             }
@@ -149,9 +160,9 @@ public final class Computed<T>: Source<T>, Sink {
     }
 
     func propagate(direct: Bool) {
-        sinks = sinks.filter { $0.sink != nil }
+        sinks = sinks.filter { $0.value.sink != nil }
         for d in sinks {
-            d.sink!.notify(direct: direct)
+            d.value.sink!.notify(direct: direct)
         }
     }
 
@@ -169,12 +180,12 @@ public final class Computed<T>: Source<T>, Sink {
         propagate(direct: false)
     }
 
-    func addSink(_ sink: any Sink) {
-        sinks.append(WeakSink(sink: sink))
+    func removeSink(_ sink: any Sink) {
+        sinks[sink.id] = nil
     }
 
-    func removeSink(_ sink: any Sink) {
-        sinks = sinks.filter { $0.sink != nil && $0.sink !== sink }
+    func addSink(_ sink: any Sink) {
+        sinks[sink.id] = WeakSink(sink: sink)
     }
 }
 
@@ -186,6 +197,8 @@ extension Computed where T: Equatable {
 
 // TODO: make effect scope own this
 public final class Effect: EffectOwner, Sink {
+    public let id = currentId.add(1, ordering: .relaxed).oldValue
+
     var souces: [any Source] = []
     var effect: () -> Void
     var hasPendingRerun = false
