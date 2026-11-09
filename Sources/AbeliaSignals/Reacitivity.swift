@@ -7,6 +7,9 @@ protocol Source<T>: AnyObject, Identifiable<UInt64> {
 
     func addSink(_ sink: any Sink)
     func removeSink(_ sink: any Sink)
+
+    /// bring the value up to date; a source that changes notifies its sinks with `direct: true`
+    func updateIfNeeded()
 }
 
 protocol Sink: AnyObject, Identifiable<UInt64> {
@@ -58,6 +61,9 @@ public final class Signal<T>: Source<T> {
     }
 
     public var peek: T { _value }
+
+    // a changed signal marks its sinks `.dirty` directly, so there is nothing to pull
+    func updateIfNeeded() {}
 
     public init(_ value: T, equals: ((T, T) -> Bool)?) {
         self._value = value
@@ -135,14 +141,22 @@ public final class Computed<T>: Source<T>, Sink {
             recompute()
         case .maybe:
             state = .clean
-            // if deps is all clean then no one notify us then we must be clean
-            // Bug: wont work if `source` is .maybe
-            if sources.allSatisfy({ $0.state == .clean }) {
-                return
+            // pull sources in read order. one that recomputes and *changes* calls
+            // propagate(direct: true), and our notify(direct: true) marks us `.dirty`
+            for source in sources {
+                source.updateIfNeeded()
+                // stop at the first change: with dynamic deps the rest may no longer be read
+                if state == .dirty { break }
             }
-
-            recompute()
+            if state == .dirty {
+                state = .clean
+                recompute()
+            }
         }
+    }
+
+    func updateIfNeeded() {
+        recomputeIfNeeded()
     }
 
     // nil mean reusing fail

@@ -1,4 +1,8 @@
+#if ALIEN
+import AlienSignals
+#else
 import AbeliaSignals
+#endif
 
 // MARK: 1. Primitives — raw per-operation overhead
 

@@ -1,4 +1,8 @@
+#if ALIEN
+import AlienSignals
+#else
 import AbeliaSignals
+#endif
 
 // MARK: 3. Correctness counters — "does it do the minimal amount of work?"
 
@@ -136,12 +140,21 @@ func runChecks() {
 
     check("scheduler: 100 writes then flush reruns effect once", expected: 1) {
         let a = Signal(0)
-        let scheduler = EffectScheduler()
         var runs = 0
+        #if ALIEN
+        // alien-signals has no scheduler; a batch is the equivalent
+        let e = Effect.immediate { runs += 1; blackHole(a.value) }
+        runs = 0
+        startBatch()
+        for _ in 0..<100 { a.value += 1 }
+        endBatch()
+        #else
+        let scheduler = EffectScheduler()
         let e = Effect(scheduler: scheduler) { runs += 1; blackHole(a.value) }
         runs = 0
         for _ in 0..<100 { a.value += 1 }
         scheduler.flush()
+        #endif
         blackHole(e)
         return runs
     }

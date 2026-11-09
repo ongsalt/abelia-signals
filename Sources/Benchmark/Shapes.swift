@@ -1,4 +1,8 @@
+#if ALIEN
+import AlienSignals
+#else
 import AbeliaSignals
+#endif
 
 // MARK: 2. Graph shapes — modeled after js-reactivity-benchmark
 

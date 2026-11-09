@@ -104,7 +104,6 @@ cd bench-js && npm run bench:bun                  # ... or Bun
 
 ## Bugs
 - `Effect.immediate` see glitched state
--  The same dependency is tracked more than once
 - `.maybe` state never short-circuits
 
 ## Optimization
