@@ -22,7 +22,7 @@ public final class EffectScheduler {
     public func flush() {
         hasPendingFlush = false
         for effect in pending {
-            effect.rerun()
+            effect.runIfNeeded()
         }
         pending = []
     }
@@ -39,7 +39,7 @@ extension Flush {
     func schedule(_ effect: Effect) {
         switch self {
         case .immediate:
-            effect.rerun()
+            effect.runIfNeeded()
         case .isolated(let actor):
             scheduleFlush(effect, on: actor)
             break

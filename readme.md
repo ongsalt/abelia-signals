@@ -38,29 +38,28 @@ scope.dispose()
 # Benchmark
 
 ```
-benchmark                                    median       min          iters/sample
-prim/signal read (untracked)                 5.0 ns       5.0 ns       9639769
-prim/signal peek                             4.3 ns       4.3 ns       11181254
-prim/signal read (tracked, 1×)               363.5 ns     360.4 ns     137501
-prim/signal read (tracked, same ×100)        3.9 µs       3.9 µs       12705
-prim/signal write (same value, equals cutoff) 12.3 ns      12.2 ns      4078004
-prim/signal write (0 subscribers)            47.8 ns      47.6 ns      1024171
-prim/signal write (1 subscribers)            169.0 ns     168.1 ns     297137
-prim/signal write (10 subscribers)           1.4 µs       1.3 µs       37158
-prim/signal write (100 subscribers)          13.0 µs      12.9 µs      3879
-prim/create Signal                           50.4 ns      50.0 ns      992495
-prim/create Computed + first read            639.1 ns     617.0 ns     92063
-prim/create Effect.immediate                 518.9 ns     468.0 ns     130538
-shape/deep chain ×10                         5.9 µs       5.8 µs       8546
-shape/deep chain ×100                        64.3 µs      64.1 µs      776
-shape/deep chain ×1000                       658.5 µs     656.5 µs     76
-shape/fan-out 1→1000 computeds (read all)    321.3 µs     319.0 µs     154
-shape/fan-out 1→1000 effects (immediate)     224.7 µs     223.9 µs     221
-shape/fan-in 1000→1 (write one)              47.7 µs      47.3 µs      1059
-shape/diamond 1→2→1                          1.5 µs       1.5 µs       33110
-shape/wide diamond 1→100→1                   66.3 µs      66.0 µs      762
-shape/layered grid 10×100                    92.5 µs      89.8 µs      534
-shape/dynamic deps (switch 50↔50)            13.2 µs      13.1 µs      3715
+prim/signal read (untracked)                 4.7 ns       4.7 ns       10580628
+prim/signal peek                             4.0 ns       3.9 ns       12640248
+prim/signal read (tracked, 1×)               362.1 ns     355.9 ns     134757
+prim/signal read (tracked, same ×100)        3.8 µs       3.7 µs       12821
+prim/signal write (same value, equals cutoff) 11.7 ns      11.4 ns      4311348
+prim/signal write (0 subscribers)            46.4 ns      45.5 ns      1082568
+prim/signal write (1 subscribers)            161.2 ns     158.6 ns     297104
+prim/signal write (10 subscribers)           1.3 µs       1.3 µs       37468
+prim/signal write (100 subscribers)          12.4 µs      12.3 µs      3970
+prim/create Signal                           47.3 ns      46.6 ns      1055982
+prim/create Computed + first read            581.8 ns     502.7 ns     110881
+prim/create Effect.immediate                 510.8 ns     465.8 ns     121133
+shape/deep chain ×10                         7.1 µs       6.7 µs       7495
+shape/deep chain ×100                        76.7 µs      76.0 µs      647
+shape/deep chain ×1000                       784.2 µs     774.9 µs     63
+shape/fan-out 1→1000 computeds (read all)    316.4 µs     306.5 µs     156
+shape/fan-out 1→1000 effects (immediate)     222.9 µs     221.8 µs     224
+shape/fan-in 1000→1 (write one)              45.2 µs      45.0 µs      1075
+shape/diamond 1→2→1                          1.4 µs       1.4 µs       34560
+shape/wide diamond 1→100→1                   64.7 µs      62.9 µs      775
+shape/layered grid 10×100                    86.9 µs      85.4 µs      574
+shape/dynamic deps (switch 50↔50)            12.8 µs      12.4 µs      3929
 ```
 
 ## alien-signals (node)
@@ -104,7 +103,6 @@ cd bench-js && npm run bench:bun                  # ... or Bun
 
 ## Bugs
 - `Effect.immediate` see glitched state
-- `.maybe` state never short-circuits
 
 ## Optimization
 - spam `@inlinable`, `@usableFromInline`, `@exclusivity(unchecked)`

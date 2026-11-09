@@ -118,13 +118,13 @@ public final class Computed<T>: Source<T>, Sink {
     var _value: T?
 
     public var value: T {
-        recomputeIfNeeded()
+        updateIfNeeded()
         currentSink?.trackRead(self)
         return _value!
     }
 
     public var peek: T {
-        recomputeIfNeeded()
+        updateIfNeeded()
         return _value!
     }
 
@@ -133,7 +133,7 @@ public final class Computed<T>: Source<T>, Sink {
         self.equals = equals
     }
 
-    func recomputeIfNeeded() {
+    func updateIfNeeded() {
         switch state {
         case .clean: break
         case .dirty:
@@ -141,11 +141,8 @@ public final class Computed<T>: Source<T>, Sink {
             recompute()
         case .maybe:
             state = .clean
-            // pull sources in read order. one that recomputes and *changes* calls
-            // propagate(direct: true), and our notify(direct: true) marks us `.dirty`
             for source in sources {
                 source.updateIfNeeded()
-                // stop at the first change: with dynamic deps the rest may no longer be read
                 if state == .dirty { break }
             }
             if state == .dirty {
@@ -153,10 +150,6 @@ public final class Computed<T>: Source<T>, Sink {
                 recompute()
             }
         }
-    }
-
-    func updateIfNeeded() {
-        recomputeIfNeeded()
     }
 
     // nil mean reusing fail
@@ -251,6 +244,8 @@ public final class Effect: EffectOwner, Sink {
     var sources: [any Source] = []
     var effect: () -> Void
     var hasPendingRerun = false
+    // when we are certain, otherwise check
+    var isDirty = false
 
     let flush: Flush
 
@@ -289,8 +284,24 @@ public final class Effect: EffectOwner, Sink {
         Effect(flush: .immediate, effect: effect)
     }
 
+    /// to prevent run when not needed
+    func runIfNeeded() {
+        if !isDirty {
+            for source in sources {
+                source.updateIfNeeded()
+                if isDirty { break }
+            }
+        }
+        if isDirty {
+            rerun()
+        } else {
+            hasPendingRerun = false
+        }
+    }
+
     var currentTrackingIndex: Int = 0
     func rerun() {
+        isDirty = false
         currentTrackingIndex = 0
 
         let prevSink = currentSink
@@ -328,7 +339,8 @@ public final class Effect: EffectOwner, Sink {
         self.currentTrackingIndex += 1
     }
 
-    func notify(direct _: Bool) {
+    func notify(direct: Bool) {
+        if direct { isDirty = true }
         if !hasPendingRerun {
             hasPendingRerun = true
             flush.schedule(self)

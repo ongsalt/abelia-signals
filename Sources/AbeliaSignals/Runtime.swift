@@ -41,7 +41,7 @@ func scheduleFlush(_ effect: Effect, on isolation: any Actor) {
 
                 guard let tasks else { return }
                 for effect in tasks.values {
-                    effect.rerun()
+                    effect.runIfNeeded()
                 }
             }
         }
