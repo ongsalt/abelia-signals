@@ -9,3 +9,6 @@ DerivedData/
 
 /.index-build
 /.build-cli
+
+perf.data
+perf.data.old

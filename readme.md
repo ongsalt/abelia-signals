@@ -37,7 +37,6 @@ scope.dispose()
 
 # Benchmark
 
-after
 ```
 benchmark                                    median       min          iters/sample
 prim/signal read (untracked)                 12.5 ns      12.3 ns      3997339
@@ -62,6 +61,29 @@ shape/diamond 1→2→1                          88.6 ns      87.8 ns      56509
 shape/wide diamond 1→100→1                   88.3 ns      87.9 ns      561527
 shape/layered grid 10×100                    4.1 µs       4.1 µs       12075
 shape/dynamic deps (switch 50↔50)            89.2 ns      87.9 ns      564773
+```
+
+## Compare to alien-signals
+holy shit
+```
+case	                        Swift	Node	Bun
+signal read (untracked)	        13.1 ns	2.2 ns	1.5 ns
+signal write (0 subs)	        45 ns	14.7 ns	8.5 ns
+tracked read ×100 (same signal)	30.1 µs	267 ns	280 ns
+write → 100 subscribers	        8.5 µs	425 ns	393 ns
+diamond 1→2→1	                2.5 µs	122 ns	100 ns
+deep chain ×1000	            717 µs	40 µs	33 µs
+fan-out 1→1000 computeds	    68.5 ms	31 µs	32 µs
+wide diamond 1→100→1	        820 µs	4.4 µs	3.8 µs
+layered grid 10×100	            157 µs	4.5 µs	4.7 µs
+dynamic deps 50↔50	            12.2 µs	1.9 µs	1.9 µs
+```
+
+## Running it
+```sh
+swift run -c release Benchmark [check|<filter>]   # Swift
+cd bench-js && npm i && npm run bench             # same suite on alien-signals (Node)
+cd bench-js && npm run bench:bun                  # ... or Bun
 ```
 
 # Todo

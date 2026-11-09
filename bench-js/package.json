@@ -1,0 +1,15 @@
+{
+  "name": "abelia-signals-bench-js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node --expose-gc bench.ts",
+    "bench:bun": "bun bench.ts"
+  },
+  "dependencies": {
+    "alien-signals": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
+  }
+}
