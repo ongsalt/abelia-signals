@@ -38,7 +38,7 @@ scope.dispose()
 # Benchmark
 Same suite on three implementations (`median`, release build, same machine):
 - **abelia**: this library
-- **alien-signals (swift)**: `Sources/AlienSignals`, a line-by-line port of alien-signals in plain Swift (no `Unmanaged`, `@inlinable` or `@exclusivity`). Same algorithm, so it shows what the *language* costs
+- **alien-signals (swift)**: `Benchmarks/Sources/AlienSignals`, a line-by-line port of alien-signals in plain Swift (no `Unmanaged`, `@inlinable` or `@exclusivity`). Same algorithm, so it shows what the *language* costs
 - **alien-signals (node)**: the original, via `bench-js/`
 
 | case | abelia | alien (swift) | alien (node) |
@@ -140,6 +140,7 @@ shape/dynamic deps (switch 50↔50)            1.9 µs       1.8 µs       26354
 
 ## Running it
 ```sh
+cd Benchmarks                                          # separate SwiftPM package
 swift run -c release Benchmark [check|<filter>]        # abelia
 swift run -c release BenchmarkAlien [check|<filter>]   # alien-signals swift port, same suite
 cd bench-js && npm i && npm run bench             # same suite on alien-signals (Node)

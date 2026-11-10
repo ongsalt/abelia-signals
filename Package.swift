@@ -27,39 +27,6 @@ let package = Package(
             ],
         ),
 
-        .executableTarget(
-            name: "Benchmark",
-            dependencies: [
-                "AbeliaSignals"
-            ],
-            swiftSettings: [
-                .enableUpcomingFeature("ApproachableConcurrency"),
-                .enableExperimentalFeature("Lifetimes"),
-            ],
-        ),
-
-        // line-by-line alien-signals port, benchmark baseline only
-        .target(
-            name: "AlienSignals",
-            swiftSettings: [
-                .enableUpcomingFeature("ApproachableConcurrency"),
-            ],
-        ),
-
-        // same sources as Benchmark (symlinked), compiled against AlienSignals
-        .executableTarget(
-            name: "BenchmarkAlien",
-            dependencies: [
-                "AlienSignals"
-            ],
-            swiftSettings: [
-                .enableUpcomingFeature("ApproachableConcurrency"),
-                .define("ALIEN"),
-            ],
-            // Double.rounded() in the harness needs libm; Benchmark gets it via Synchronization
-            linkerSettings: [.linkedLibrary("m")],
-        ),
-
         // .testTarget(
         //     name: "AbeliaSignalsTests",
         //     dependencies: ["AbeliaSignals"]
