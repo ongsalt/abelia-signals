@@ -286,7 +286,7 @@ public final class Effect: EffectOwner, Sink {
             self.init(flush: .scheduler(scheduler), effect: effect)
         } else if let isolation {
             print("select isolated")
-            if isolation !== MainActor.shared {
+            if isolation === MainActor.shared {
                 MainActor.preconditionIsolated()
                 self.init(flush: .scheduler(mainEffectScheduler), effect: effect)
             } else {

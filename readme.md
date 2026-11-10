@@ -83,7 +83,7 @@ shape/layered grid 10×100                    89.4 µs      89.0 µs      550
 shape/dynamic deps (switch 50↔50)            12.3 µs      12.3 µs      4049
 ```
 
-## alien-signals (swift port)
+## alien-signals (naive swift port)
 ```
 benchmark                                    median       min          iters/sample
 prim/signal read (untracked)                 12.6 ns      12.3 ns      3835614
@@ -156,8 +156,9 @@ cd bench-js && npm run bench:bun                  # ... or Bun
     - also need to filter out dead sink
 
 ## Optimization
-- `@exclusivity(unchecked)`: partly done
 - plain struct + pointer, non recursive propagation
+- `.maybe` edge versioning
+- `@exclusivity(unchecked)`: partly done
 - [alien signals](https://github.com/stackblitz/alien-signals) style dependency link
 
 
