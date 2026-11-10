@@ -7,7 +7,15 @@ import PackageDescription
 let package = Package(
     name: "abelia-signals-benchmarks",
     dependencies: [
-        .package(path: "..")
+        .package(path: ".."),
+        // AttributeGraph reimplementation. Until the fix is upstream:
+        //   swift package edit Compute
+        //   add `#include <cstdint>` to Packages/Compute/Sources/ComputeCxx/Data/Pointer.h
+        // and build with (libswiftDemangle is in the toolchain's usr/lib; the manifest cache
+        // otherwise keeps Compute's pre-edit header paths):
+        //   swift build -c release --manifest-cache none --product BenchmarkCompute \
+        //     -Xlinker -L -Xlinker <toolchain>/usr/lib -Xlinker -rpath -Xlinker <toolchain>/usr/lib
+        .package(url: "https://github.com/jcmosc/Compute", branch: "main"),
     ],
     targets: [
         .executableTarget(
@@ -40,6 +48,18 @@ let package = Package(
                 .define("ALIEN"),
             ],
             // Double.rounded() in the harness needs libm; Benchmark gets it via Synchronization
+            linkerSettings: [.linkedLibrary("m")],
+        ),
+
+        // a subset of the suite on Compute: no effects, no create benchmarks
+        .executableTarget(
+            name: "BenchmarkCompute",
+            dependencies: [
+                .product(name: "Compute", package: "Compute")
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+            ],
             linkerSettings: [.linkedLibrary("m")],
         ),
     ],
