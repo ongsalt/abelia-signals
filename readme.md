@@ -152,11 +152,11 @@ cd bench-js && npm run bench:bun                  # ... or Bun
 
 ## Bugs
 - `Effect.immediate` see glitched state. So we still need to batch this: wrap aroudn signal mutation call. then `batch {}` is neutral.
+    - also need to filter out dead sink
 
 ## Optimization
-- ~~spam `@inlinable`, `@usableFromInline`~~ done, only on the typed public API (`value`, `peek`, inits): primitives 1.5–3× faster. Inlining the graph internals too made chains/effects slower
 - `@exclusivity(unchecked)`: partly done
-- plain struct + pointer
+- plain struct + pointer, non recursive propagation
 - [alien signals](https://github.com/stackblitz/alien-signals) style dependency link
 
 

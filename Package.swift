@@ -4,8 +4,8 @@ import PackageDescription
 
 let package = Package(
     name: "abelia-signals",
-    dependencies: [
-
+    products: [
+        .library(name: "AbeliaSignals", targets: ["AbeliaSignals"]),
     ],
     targets: [
         .target(
@@ -16,7 +16,7 @@ let package = Package(
             ],
         ),
 
-        .target(
+        .executableTarget(
             name: "Playground",
             dependencies: [
                 "AbeliaSignals"
