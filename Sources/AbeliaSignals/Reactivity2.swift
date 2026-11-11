@@ -100,24 +100,51 @@ extension NodeRef {
     }
 
     // for computed to check dirty
+    // depth-first over `.maybe` sources with an explicit stack; `update` may still pull
+    // re-entrantly (a computation reading another computed), that starts its own walk
     @inlinable
     func pull() -> Bool {
-        if pointee.state == .clean { return false }
-        defer { pointee.state = .clean }
+        switch pointee.state {
+        case .clean: return false
+        case .dirty: return recompute()
+        case .maybe: break
+        }
 
-        // TODO: non recursive
-        if pointee.state == .maybe {
-            var changed = false
-            for source in pointee.sources {
-                changed = changed || source.pull()
-                if changed { break }
+        // frame: a `.maybe` node and the next of its sources to check
+        var stack: [(node: NodeRef, next: Int)] = [(self, 0)]
+        // result of the frame popped last, handed to the one below it
+        var changed = false
+
+        while let (node, next) = stack.last {
+            // a source changed (or marked us `.dirty` while recomputing): recompute
+            if changed || node.pointee.state == .dirty {
+                stack.removeLast()
+                changed = node.recompute()
+                continue
             }
-            if !changed {
-                return false
+
+            // checked every source and none changed
+            if next == node.pointee.sources.count {
+                node.pointee.state = .clean
+                stack.removeLast()
+                continue
+            }
+
+            stack[stack.count - 1].next = next + 1
+            let source = node.pointee.sources[next]
+            switch source.pointee.state {
+            case .clean: break  // unchanged, signals are always here
+            case .dirty: changed = source.recompute()
+            case .maybe: stack.append((source, 0))
             }
         }
 
-        // state == .dirty or deps changed
+        return changed
+    }
+
+    // state == .dirty or a source changed
+    @inlinable
+    func recompute() -> Bool {
         let changed = pointee.owner._withUnsafeGuaranteedRef { s in
             s.update()
         }
@@ -130,6 +157,7 @@ extension NodeRef {
             }
         }
 
+        pointee.state = .clean
         return changed
     }
 
@@ -143,8 +171,11 @@ extension NodeRef {
 }
 
 @usableFromInline
+@exclusivity(unchecked)
 nonisolated(unsafe) var currentSinkNode: NodeRef?
+
 @usableFromInline
+@exclusivity(unchecked)
 nonisolated(unsafe) var currentImmediateBatch: [EffectNode]?
 
 public class NodeWrapper {
