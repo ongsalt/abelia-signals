@@ -2,8 +2,10 @@ class Runtime {
     // TODO: arena with topological sorting
 }
 
+@usableFromInline
 struct Node {
     // for computed/effect
+    @usableFromInline
     var state: State = .dirty
 
     // behavior:
@@ -15,27 +17,38 @@ struct Node {
 
     // or array + swap remove. also store back index, iterate a lot
     // or make a `DenseSlotMap`
+    @usableFromInline
     var sinks: Set<NodeRef> = []  // this still cause refcount
     // allow duplicate, dedup when propagate
+    @usableFromInline
     var sources: [NodeRef] = []  // this also cause refcount
 
     // Node address is NOT stable, but no handle are needed cuz we have back pointer to report this to wrapper
+    @usableFromInline
     var owner: Unmanaged<NodeWrapper>
     // dirty callback for effect
     // update callback for computed
+
+    @inlinable
+    init(owner: Unmanaged<NodeWrapper>) {
+        self.owner = owner
+    }
 }
 
 // sink (and user) own source, effect owner own effect
 
+@usableFromInline
 typealias NodeRef = UnsafeMutablePointer<Node>
 
 extension NodeRef {
+    @inlinable
     func trackRead(_ source: NodeRef) {
         pointee.sources.append(source)
         source.addSink(self)
     }
 
-    private func addSink(_ sink: NodeRef) {
+    @inlinable
+    func addSink(_ sink: NodeRef) {
         // retain
         if pointee.sinks.isEmpty {
             _ = pointee.owner.retain()
@@ -44,7 +57,8 @@ extension NodeRef {
         pointee.sinks.insert(sink)
     }
 
-    private func removeSink(_ sink: NodeRef) {
+    @inlinable
+    func removeSink(_ sink: NodeRef) {
         // `sources` keeps duplicates, so this can run again for a sink that's already gone;
         // only the removal that empties the set may release
         if pointee.sinks.remove(sink) != nil, pointee.sinks.isEmpty {
@@ -53,6 +67,7 @@ extension NodeRef {
     }
 
     // should not be recursive
+    @inlinable
     func propagate() {
         var next = Array(pointee.sinks)
         var directSinkLeft = next.count
@@ -85,6 +100,7 @@ extension NodeRef {
     }
 
     // for computed to check dirty
+    @inlinable
     func pull() -> Bool {
         if pointee.state == .clean { return false }
         defer { pointee.state = .clean }
@@ -117,6 +133,7 @@ extension NodeRef {
         return changed
     }
 
+    @inlinable
     func unlinkSources() {
         for source in pointee.sources {
             source.removeSink(self)
@@ -125,11 +142,16 @@ extension NodeRef {
     }
 }
 
+@usableFromInline
 nonisolated(unsafe) var currentSinkNode: NodeRef?
+@usableFromInline
 nonisolated(unsafe) var currentImmediateBatch: [EffectNode]?
 
 public class NodeWrapper {
+    @usableFromInline
     var node: NodeRef
+
+    @inlinable
     init() {
         node = .allocate(capacity: 1)
         node.initialize(to: Node(owner: .passUnretained(self)))
@@ -139,11 +161,14 @@ public class NodeWrapper {
 
     // MARK: callback from Node side
     // see state for confident level
+    @inlinable
     func becameDirty(confident: Bool) {}
 
     // computed, return `changed?`
+    @inlinable
     func update() -> Bool { false }
 
+    @inlinable
     public func dump() {
         print(node.pointee)
     }
@@ -160,7 +185,7 @@ public final class SignalNode<T>: NodeWrapper {
     @usableFromInline
     var _value: T
 
-    // @inlinable
+    @inlinable
     public var value: T {
         get {
             // this should start an immediate effect batch
@@ -181,10 +206,13 @@ public final class SignalNode<T>: NodeWrapper {
         }
     }
 
+    @inlinable
     public var peak: T { _value }
 
+    @usableFromInline
     let equals: ((T, T) -> Bool)?
 
+    @inlinable
     public init(_ value: T, equals: ((T, T) -> Bool)?) {
         _value = value
         self.equals = equals
@@ -194,6 +222,7 @@ public final class SignalNode<T>: NodeWrapper {
 }
 
 extension SignalNode where T: Equatable {
+    @inlinable
     public convenience init(_ value: T) {
         self.init(value, equals: ==)
     }
@@ -202,9 +231,12 @@ extension SignalNode where T: Equatable {
 public final class ComputedNode<T>: NodeWrapper {
     @usableFromInline
     var _value: T?
+    @usableFromInline
     let equals: ((T, T) -> Bool)?
+    @usableFromInline
     var computation: () -> T
 
+    @inlinable
     public var value: T {
         recomputeIfNeeded()
         currentSinkNode?.trackRead(node)
@@ -217,18 +249,20 @@ public final class ComputedNode<T>: NodeWrapper {
         return _value!
     }
 
+    @inlinable
     public init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
         self.computation = computation
         self.equals = equals
         super.init()
     }
 
-    @usableFromInline
+    @inlinable
     func recomputeIfNeeded() {
         // tell graph to pull, and graph decice to call update
         _ = node.pull()
     }
 
+    @inlinable
     override func update() -> Bool {
         let prev = currentSinkNode
         currentSinkNode = node
@@ -243,17 +277,22 @@ public final class ComputedNode<T>: NodeWrapper {
 }
 
 extension ComputedNode where T: Equatable {
+    @inlinable
     public convenience init(_ computation: @escaping () -> T) {
         self.init(computation, equals: ==)
     }
 }
 
 public final class EffectNode: NodeWrapper {
+    @usableFromInline
     let effect: () -> Void
+    @usableFromInline
     var immediate: Bool
 
+    @usableFromInline
     var isReallyDirty: Bool = false
 
+    @inlinable
     public init(immediate: Bool = true, effect: @escaping () -> Void) {
         self.immediate = immediate
         self.effect = effect
@@ -262,6 +301,7 @@ public final class EffectNode: NodeWrapper {
         runEffect(force: true)
     }
 
+    @inlinable
     override func becameDirty(confident: Bool) {
         // schedule the update
         if !immediate { fatalError("unimplemented") }
@@ -272,8 +312,10 @@ public final class EffectNode: NodeWrapper {
         currentImmediateBatch!.append(self)
     }
 
+    @inlinable
     override func update() -> Bool { true }
 
+    @inlinable
     func runEffect(force: Bool = false) {
         defer {
             node.pointee.state = .clean
@@ -292,6 +334,7 @@ public final class EffectNode: NodeWrapper {
     }
 }
 
+@inlinable
 public func batch<T>(body: () -> T) -> T {
     let prev = currentImmediateBatch
     currentImmediateBatch = []
