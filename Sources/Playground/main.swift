@@ -1,14 +1,13 @@
 import AbeliaSignals
 
 let a = SignalNode(1)
-let b = SignalNode(1)
 
 let c = ComputedNode {
-    a.value + b.value
+    a.value + 1
 }
 
 let e2 = EffectNode {
-    print("[immediate] \(c.value)")
+    print("[immediate] c = \(c.value)")
 }
 
 Task {

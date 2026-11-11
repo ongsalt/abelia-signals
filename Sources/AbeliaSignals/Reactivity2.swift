@@ -7,7 +7,7 @@ class Runtime {
     // fallback Scheduler
 }
 
-struct Node: ~Copyable {
+struct Node {
     // for computed/effect
     var state: State = .dirty
 
@@ -61,11 +61,9 @@ extension NodeRef {
     func propagate() {
         var next = Array(pointee.sinks)
         var directSinkLeft = next.count
-        print("directSinks: \(next)")
 
         while let top = next.popLast() {
             let isDirectSink = next.count < directSinkLeft
-            print("processing \(top.pointee.owner) direct:\(isDirectSink) state:\(top.pointee.state)")
             if isDirectSink {  // is direct sink
                 directSinkLeft -= 1
                 if top.pointee.state == .dirty { continue }
@@ -78,13 +76,11 @@ extension NodeRef {
                 if top.pointee.state == .dirty || top.pointee.state == .maybe {
                     continue
                 }
-                // TODO: maybe
                 top.pointee.state = .maybe
-                top.pointee.state = .dirty
             }
 
             top.pointee.owner._withUnsafeGuaranteedRef { s in
-                s.becameDirty(confident: true)
+                s.becameDirty(confident: isDirectSink)
             }
 
             for sink in top.pointee.sinks {
@@ -94,28 +90,25 @@ extension NodeRef {
     }
 
     // for computed to check dirty
-    func pull(propagate doPropagate: Bool = false) -> Bool {
+    func pull() -> Bool {
         if pointee.state == .clean { return false }
         defer { pointee.state = .clean }
-        // if pointee.state == .maybe {
-        //     var changed = false
-        //     for source in pointee.sources {
-        //         changed = changed || source.pull()
-        //         if changed { break }
-        //     }
 
-        //     if !changed {
-        //         return false
-        //     }
-        // }
+        // TODO: non recursive
+        if pointee.state == .maybe {
+            var changed = false
+            for source in pointee.sources {
+                changed = changed || source.pull()
+                if changed { break }
+            }
+            if !changed {
+                return false
+            }
+        }
 
         // state == .dirty or deps changed
         let changed = pointee.owner._withUnsafeGuaranteedRef { s in
             s.update()
-        }
-
-        if changed {
-            propagate()
         }
 
         return changed
@@ -148,6 +141,10 @@ public class NodeWrapper {
     // computed, return `changed?`
     func update() -> Bool { false }
 
+    public func dump() {
+        print(node.pointee)
+    }
+
     deinit {
         assert(node.pointee.sinks.isEmpty)
         node.unlinkSources()
@@ -168,20 +165,14 @@ public final class SignalNode<T>: NodeWrapper {
             return _value
         }
         set {
-            let shouldStartBatch = currentImmediateBatch == nil
-            if shouldStartBatch {
-                currentImmediateBatch = []
-            }
-
             _value = newValue
-            node.propagate()
 
-            // flush
-            if shouldStartBatch {
-                for effect in currentImmediateBatch! {
-                    effect.runEffect()
+            if currentImmediateBatch == nil {
+                batch {
+                    node.propagate()
                 }
-                currentImmediateBatch = nil
+            } else {
+                node.propagate()
             }
         }
     }
@@ -232,10 +223,6 @@ public final class ComputedNode<T>: NodeWrapper {
 
         node.unlinkSources()
         _value = computation()
-        // print("compute")
-        // print(node.pointee.sources)
-        // print(node.pointee.sinks)
-
         return true
     }
 }
@@ -257,13 +244,14 @@ public final class EffectNode: NodeWrapper {
     override func becameDirty(confident: Bool) {
         // schedule the update
         if !immediate { fatalError("unimplemented") }
-        print("became dirty confident:\(isReallyDirty)")
 
         if confident {
             isReallyDirty = true
         }
         currentImmediateBatch!.append(self)
     }
+
+    override func update() -> Bool { true }
 
     func runEffect(force: Bool = false) {
         defer {
@@ -281,4 +269,17 @@ public final class EffectNode: NodeWrapper {
         node.unlinkSources()
         effect()
     }
+}
+
+public func batch<T>(body: () -> T) -> T {
+    let prev = currentImmediateBatch
+    currentImmediateBatch = []
+    let ret = body()
+
+    for effect in currentImmediateBatch! {
+        effect.runEffect()
+    }
+
+    currentImmediateBatch = prev
+    return ret
 }
