@@ -1,0 +1,126 @@
+name: Benchmarks (macOS, real AttributeGraph)
+
+# v2, Apple's AttributeGraph (via OpenAttributeGraphShims), Compute and alien-signals on Node,
+# all on the same runner so the numbers are comparable with each other (not with local runs).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Benchmarks/**"
+      - "bench-js/**"
+      - ".github/workflows/bench-macos.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: bench (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # DarwinPrivateFrameworks only ships AttributeGraph stubs for the 2024 release (macOS 15),
+          # so macos-15 is the run that matches the system framework
+          - os: macos-15
+            experimental: false
+          # macOS 26 loads the 2025 AttributeGraph through the 2024 stubs: may not link or run
+          - os: macos-26
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    env:
+      # read by OpenAttributeGraph's manifest: back OpenAttributeGraphShims with Apple's AttributeGraph
+      OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_ATTRIBUTEGRAPH: 1
+      OPENATTRIBUTEGRAPH_TARGET_RELEASE: 2024
+      DARWINPRIVATEFRAMEWORKS_TARGET_RELEASE: 2024
+      # plain module builds, no .swiftinterface verification
+      OPENATTRIBUTEGRAPH_LIBRARY_EVOLUTION: 0
+      DARWINPRIVATEFRAMEWORKS_LIBRARY_EVOLUTION: 0
+      SWIFT_VERSION: "6.4"
+    steps:
+      - uses: actions/checkout@v4
+
+      # the manifests are swift-tools-version 6.4, newer than the Xcode toolchains on the images
+      - name: Install Swift ${{ env.SWIFT_VERSION }} (swiftly)
+        run: |
+          curl -fsSL -o swiftly.pkg https://download.swift.org/swiftly/darwin/swiftly.pkg
+          installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+          ~/.swiftly/bin/swiftly init --quiet-shell-followup --assume-yes --skip-install
+          . "${SWIFTLY_HOME_DIR:-$HOME/.swiftly}/env.sh"
+          swiftly install --use "$SWIFT_VERSION"
+          echo "${SWIFTLY_BIN_DIR:-$HOME/.swiftly/bin}" >> "$GITHUB_PATH"
+          echo "SWIFT_TOOLCHAIN=$(swiftly use --print-location)" >> "$GITHUB_ENV"
+          swift --version
+
+      - name: Machine
+        run: |
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.ncpu
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build v2 and AG
+        working-directory: Benchmarks
+        run: |
+          swift build -c release --product BenchmarkV2
+          swift build -c release --product BenchmarkAG
+          echo "BIN=$(swift build -c release --show-bin-path)" >> "$GITHUB_ENV"
+
+      - name: Run v2
+        working-directory: Benchmarks
+        run: mkdir -p out && "$BIN/BenchmarkV2" | tee out/v2.txt
+
+      - name: Run AttributeGraph (checks, then benchmarks)
+        working-directory: Benchmarks
+        run: |
+          set -o pipefail
+          "$BIN/BenchmarkAG" | tee out/ag.txt
+
+      # separate build dir: the C++ flags differ, and Compute is allowed to fail
+      - name: Build and run Compute
+        id: compute
+        continue-on-error: true
+        working-directory: Benchmarks
+        run: |
+          set -o pipefail
+          flags=(-c release --scratch-path .build-compute
+            -Xcxx -DNDEBUG -Xcxx -O2
+            -Xlinker -L -Xlinker "$SWIFT_TOOLCHAIN/usr/lib"
+            -Xlinker -rpath -Xlinker "$SWIFT_TOOLCHAIN/usr/lib")
+          swift build "${flags[@]}" --product BenchmarkCompute
+          "$(swift build "${flags[@]}" --show-bin-path)/BenchmarkCompute" | tee out/compute.txt
+
+      - name: Run alien-signals (Node)
+        working-directory: bench-js
+        run: npm ci && npm run bench | tee ../Benchmarks/out/node.txt
+
+      - name: Summary
+        if: always()
+        working-directory: Benchmarks
+        run: |
+          {
+            echo "## ${{ matrix.os }}"
+            echo
+            echo '```'
+            sw_vers
+            sysctl -n machdep.cpu.brand_string
+            echo '```'
+            echo
+            python3 scripts/table.py \
+              "v2=out/v2.txt" \
+              "AttributeGraph=out/ag.txt" \
+              "Compute=out/compute.txt" \
+              "alien (node)=out/node.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.os }}
+          path: Benchmarks/out/

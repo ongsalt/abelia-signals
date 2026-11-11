@@ -1,4 +1,7 @@
-// The suite's subset that maps onto Compute (an AttributeGraph reimplementation).
+// The suite's subset that maps onto the AttributeGraph API. Built twice:
+//   BenchmarkCompute → Compute (jcmosc's reimplementation)
+//   BenchmarkAG      → Apple's AttributeGraph via OpenAttributeGraphShims (macOS only, `-D AG`, symlinked)
+// Both expose the same Swift API (Graph, Subgraph, Attribute, Rule), so the code is shared.
 // Same case names and harness as Benchmark/BenchmarkAlien so the numbers line up.
 //
 //   signal   = Attribute(value:)            read/write `.value`
@@ -11,7 +14,18 @@
 //   swift run -c release BenchmarkCompute check      → checks only
 //   swift run -c release BenchmarkCompute <filter>   → benchmarks whose name contains <filter>
 
+#if AG
+import OpenAttributeGraphShims
+
+// without the env var the shims build OpenAttributeGraph's own engine, which is still a stub
+precondition(
+    attributeGraphVendor == .ag,
+    "BenchmarkAG isn't linked against Apple's AttributeGraph (vendor: \(attributeGraphVendor.rawValue)); "
+        + "build with OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_ATTRIBUTEGRAPH=1"
+)
+#else
 import Compute
+#endif
 
 let graph = Graph()
 let subgraph = Subgraph(graph: graph)

@@ -4,6 +4,8 @@ import PackageDescription
 
 let package = Package(
     name: "abelia-signals",
+    // Synchronization (Atomic, Mutex)
+    platforms: [.macOS(.v15)],
     products: [
         .library(name: "AbeliaSignals", targets: ["AbeliaSignals"]),
     ],

@@ -1,3 +1,5 @@
+// `[N of T]` is InlineArray: macOS 26+ on Darwin (the package targets macOS 15)
+@available(macOS 26.0, iOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 struct SmallArray<let InlineSize: Int, T> {
     private(set) var count: Int = 0
     var inlineStorage: [InlineSize of T?] = .init(repeating: nil)
@@ -6,6 +8,7 @@ struct SmallArray<let InlineSize: Int, T> {
     init() {}
 }
 
+@available(macOS 26.0, iOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 extension SmallArray: RandomAccessCollection, MutableCollection {
     var startIndex: Int { 0 }
     var endIndex: Int { count }
@@ -29,6 +32,7 @@ extension SmallArray: RandomAccessCollection, MutableCollection {
     }
 }
 
+@available(macOS 26.0, iOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
 extension SmallArray {
     var isSpilled: Bool { arrayStorage != nil }
 

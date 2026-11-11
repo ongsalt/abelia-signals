@@ -3,9 +3,11 @@
 import PackageDescription
 
 // Benchmarks for AbeliaSignals, kept out of the library package.
-// Run from this directory: swift run -c release Benchmark [check|<filter>]
+// Run from this directory: swift run -c release Benchmark [<filter>]
 let package = Package(
     name: "abelia-signals-benchmarks",
+    // Synchronization (root package) and Apple's AttributeGraph stubs both need macOS 15
+    platforms: [.macOS(.v15)],
     dependencies: [
         .package(path: ".."),
         // AttributeGraph reimplementation. Until the fix is upstream:
@@ -14,6 +16,7 @@ let package = Package(
         // and build with (libswiftDemangle is in the toolchain's usr/lib; the manifest cache
         // otherwise keeps Compute's pre-edit header paths):
         //   swift build -c release --manifest-cache none --product BenchmarkCompute \
+        //     -Xcxx -DNDEBUG -Xcxx -O2 \
         //     -Xlinker -L -Xlinker <toolchain>/usr/lib -Xlinker -rpath -Xlinker <toolchain>/usr/lib
         .package(url: "https://github.com/jcmosc/Compute", branch: "main"),
     ],
@@ -76,3 +79,31 @@ let package = Package(
         ),
     ],
 )
+
+// Apple's real AttributeGraph, macOS only: the same source as BenchmarkCompute (symlinked),
+// built against OpenAttributeGraphShims, which re-exports the private framework (linked through
+// DarwinPrivateFrameworks' .tbd stubs, so it binds to /System/Library/PrivateFrameworks at runtime).
+//
+// The AG backend is chosen by an env var read when OpenAttributeGraph's manifest is evaluated:
+//   OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_ATTRIBUTEGRAPH=1 \
+//   OPENATTRIBUTEGRAPH_TARGET_RELEASE=2024 DARWINPRIVATEFRAMEWORKS_TARGET_RELEASE=2024 \
+//     swift run -c release BenchmarkAG
+// Without it the shims fall back to OpenAttributeGraph's own (unimplemented) engine, and the
+// benchmark refuses to run. See .github/workflows/bench-macos.yml.
+#if os(macOS)
+package.dependencies.append(
+    .package(url: "https://github.com/OpenSwiftUIProject/OpenAttributeGraph", branch: "main")
+)
+package.targets.append(
+    .executableTarget(
+        name: "BenchmarkAG",
+        dependencies: [
+            .product(name: "OpenAttributeGraphShims", package: "OpenAttributeGraph")
+        ],
+        swiftSettings: [
+            .enableUpcomingFeature("ApproachableConcurrency"),
+            .define("AG"),
+        ],
+    )
+)
+#endif
