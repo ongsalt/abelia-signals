@@ -2,15 +2,9 @@ name: Benchmarks (macOS, real AttributeGraph)
 
 # v2, Apple's AttributeGraph (via OpenAttributeGraphShims), Compute and alien-signals on Node,
 # all on the same runner so the numbers are comparable with each other (not with local runs).
+# manual only: Actions → "Benchmarks (macOS, real AttributeGraph)" → Run workflow
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "Sources/**"
-      - "Benchmarks/**"
-      - "bench-js/**"
-      - ".github/workflows/bench-macos.yml"
 
 permissions:
   contents: read
