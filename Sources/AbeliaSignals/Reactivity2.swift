@@ -48,8 +48,6 @@ struct Node {
 typealias NodeRef = UnsafeMutablePointer<Node>
 
 extension NodeRef {
-    // same as v1: a rerun overwrites `sources` slot by slot, so reading the same deps in the
-    // same order touches no links at all; only a slot that changed is unlinked/relinked
     @inlinable
     func trackRead(_ source: NodeRef) {
         let i = pointee.trackingIndex
@@ -71,8 +69,6 @@ extension NodeRef {
         pointee.trackingIndex = i + 1
     }
 
-    // run `body` as the current sink: reads inside it fill `sources` from slot 0,
-    // and every slot past what this run read is unlinked afterwards
     @inlinable
     func withTracking<R>(_ body: () -> R) -> R {
         let prev = currentSinkNode
@@ -116,34 +112,38 @@ extension NodeRef {
     // should not be recursive
     @inlinable
     func propagate() {
-        var next = Array(pointee.sinks.keys)
-        var directSinkLeft = next.count
+        var next: [NodeRef] = []
+
+        for sink in pointee.sinks.keys where sink.markDirty(direct: true) {
+            for s in sink.pointee.sinks.keys { next.append(s) }
+        }
 
         while let top = next.popLast() {
-            let isDirectSink = next.count < directSinkLeft
-            if isDirectSink {  // is direct sink
-                directSinkLeft -= 1
-                if top.pointee.state == .dirty { continue }
-                if top.pointee.state == .maybe {
-                    top.pointee.state = .dirty
-                    continue
-                }
-                top.pointee.state = .dirty
-            } else {
-                if top.pointee.state == .dirty || top.pointee.state == .maybe {
-                    continue
-                }
-                top.pointee.state = .maybe
-            }
-
-            top.pointee.owner._withUnsafeGuaranteedRef { s in
-                s.becameDirty(confident: isDirectSink)
-            }
-
-            for sink in top.pointee.sinks.keys {
-                next.append(sink)
+            if top.markDirty(direct: false) {
+                for s in top.pointee.sinks.keys { next.append(s) }
             }
         }
+    }
+
+    // mark one sink of a changed node: `.dirty` if it reads the changed node directly,
+    // `.maybe` otherwise. returns whether its own sinks still need marking
+    @inlinable
+    func markDirty(direct: Bool) -> Bool {
+        switch pointee.state {
+        case .dirty:
+            return false
+        case .maybe:
+            // already visited, its sinks are marked; a direct hit upgrades it
+            if direct { pointee.state = .dirty }
+            return false
+        case .clean:
+            pointee.state = direct ? .dirty : .maybe
+        }
+
+        pointee.owner._withUnsafeGuaranteedRef { s in
+            s.becameDirty(confident: direct)
+        }
+        return true
     }
 
     // for computed to check dirty
@@ -159,7 +159,6 @@ extension NodeRef {
 
         // frame: a `.maybe` node and the next of its sources to check
         var stack: [(node: NodeRef, next: Int)] = [(self, 0)]
-        // result of the frame popped last, handed to the one below it
         var changed = false
 
         while let (node, next) = stack.last {
@@ -270,6 +269,9 @@ public final class SignalNode<T>: NodeWrapper {
         set {
             if let equals, equals(_value, newValue) { return }
             _value = newValue
+
+            // nobody to notify: skip the batch and the walk
+            if node.pointee.sinks.isEmpty { return }
 
             if currentImmediateBatch == nil {
                 batch {
