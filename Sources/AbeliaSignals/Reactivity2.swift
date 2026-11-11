@@ -264,6 +264,7 @@ public class NodeWrapper {
 
 public final class SignalNode<T>: NodeWrapper {
     @usableFromInline
+    @exclusivity(unchecked)
     var _value: T
 
     @inlinable
