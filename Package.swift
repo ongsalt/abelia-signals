@@ -27,9 +27,24 @@ let package = Package(
             ],
         ),
 
-        // .testTarget(
-        //     name: "AbeliaSignalsTests",
-        //     dependencies: ["AbeliaSignals"]
-        // ),
+        // v1: Signal / Computed / Effect
+        .testTarget(
+            name: "AbeliaSignalsTests",
+            dependencies: ["AbeliaSignals"],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+                .define("V1"),
+            ],
+        ),
+
+        // v2: same tests (Correctness.swift is a symlink), node API via V2Shim
+        .testTarget(
+            name: "AbeliaSignalsV2Tests",
+            dependencies: ["AbeliaSignals"],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+                .define("V2"),
+            ],
+        ),
     ],
 )

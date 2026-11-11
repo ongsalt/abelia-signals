@@ -204,10 +204,11 @@ shape/dynamic deps (switch 50↔50)            5.8 µs       5.8 µs       8635
 
 ## Running it
 ```sh
+swift test                                             # correctness tests (v1 + v2), root package
 cd Benchmarks                                          # separate SwiftPM package
-swift run -c release BenchmarkV2 [check|<filter>]      # v2
-swift run -c release Benchmark [check|<filter>]        # v1
-swift run -c release BenchmarkAlien [check|<filter>]   # alien-signals swift port, same suite
+swift run -c release BenchmarkV2 [<filter>]            # v2
+swift run -c release Benchmark [<filter>]              # v1
+swift run -c release BenchmarkAlien [<filter>]         # alien-signals swift port, same suite
 swift run -c release BenchmarkCompute [check|<filter>] # Compute subset, see Package.swift for build flags
 cd bench-js && npm i && npm run bench             # same suite on alien-signals (Node)
 cd bench-js && npm run bench:bun                  # ... or Bun
