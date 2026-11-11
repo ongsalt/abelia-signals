@@ -27,11 +27,17 @@ struct Node {
     @usableFromInline
     var owner: Unmanaged<NodeWrapper>
     // dirty callback for effect
-    // update callback for computed
+
+    // update callback for computed, return `changed?`. called with `owner`.
+    // built in each subclass's `@inlinable` init, where `T` is concrete, so the call
+    // lands in specialized code instead of the unspecialized `ComputedNode<T>` vtable entry
+    @usableFromInline
+    let update: (NodeWrapper) -> Bool
 
     @inlinable
-    init(owner: Unmanaged<NodeWrapper>) {
+    init(owner: Unmanaged<NodeWrapper>, update: @escaping (NodeWrapper) -> Bool) {
         self.owner = owner
+        self.update = update
     }
 }
 
@@ -146,7 +152,7 @@ extension NodeRef {
     @inlinable
     func recompute() -> Bool {
         let changed = pointee.owner._withUnsafeGuaranteedRef { s in
-            s.update()
+            pointee.update(s)
         }
 
         // we are clean now, so a sink pulling us later gets `false` back;
@@ -184,9 +190,9 @@ public class NodeWrapper {
     var node: NodeRef
 
     @inlinable
-    init() {
+    init(update: @escaping (NodeWrapper) -> Bool = { _ in true }) {
         node = .allocate(capacity: 1)
-        node.initialize(to: Node(owner: .passUnretained(self)))
+        node.initialize(to: Node(owner: .passUnretained(self), update: update))
 
         // keep `self` alive only when other node depends on this
     }
@@ -195,10 +201,6 @@ public class NodeWrapper {
     // see state for confident level
     @inlinable
     func becameDirty(confident: Bool) {}
-
-    // computed, return `changed?`
-    @inlinable
-    func update() -> Bool { true }
 
     @inlinable
     public func dump() {
@@ -286,7 +288,10 @@ public final class ComputedNode<T>: NodeWrapper {
     public init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
         self.computation = computation
         self.equals = equals
-        super.init()
+        // no captures: `self` comes in as the argument, so there's no cycle
+        super.init(update: { wrapper in
+            unsafeDowncast(wrapper, to: ComputedNode<T>.self).update()
+        })
     }
 
     @inlinable
@@ -296,7 +301,7 @@ public final class ComputedNode<T>: NodeWrapper {
     }
 
     @inlinable
-    override func update() -> Bool {
+    func update() -> Bool {
         let prev = currentSinkNode
         currentSinkNode = node
         defer { currentSinkNode = prev }
