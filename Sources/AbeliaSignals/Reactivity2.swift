@@ -301,8 +301,12 @@ public final class SignalNode<T>: NodeWrapper {
     @inlinable
     public func update<R, E>(_ body: (inout T) throws(E) -> R) throws(E) -> R {
         checkNotUpdating()
-        let result = try body(&_value)
-        // after clearing the flag: effects flushed by the batch may read this signal
+        isUpdating = true
+        let result: R
+        do {
+            defer { isUpdating = false }  // cleared on throw too
+            result = try body(&_value)
+        }
         notifySinks()
         return result
     }
