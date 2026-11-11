@@ -1,10 +1,5 @@
-// all public `init` must lookup `Runtime`.
 class Runtime {
-    // node arena
-    // link arena
-
-    // pending synchronous (immediate) flush
-    // fallback Scheduler
+    // TODO: arena with topological sorting
 }
 
 struct Node {
@@ -50,9 +45,9 @@ extension NodeRef {
     }
 
     private func removeSink(_ sink: NodeRef) {
-        pointee.sinks.remove(sink)
-
-        if pointee.sinks.isEmpty {
+        // `sources` keeps duplicates, so this can run again for a sink that's already gone;
+        // only the removal that empties the set may release
+        if pointee.sinks.remove(sink) != nil, pointee.sinks.isEmpty {
             pointee.owner.release()
         }
     }
@@ -111,6 +106,14 @@ extension NodeRef {
             s.update()
         }
 
+        // we are clean now, so a sink pulling us later gets `false` back;
+        // tell the ones still waiting that we really changed
+        if changed {
+            for sink in pointee.sinks where sink.pointee.state == .maybe {
+                sink.pointee.state = .dirty
+            }
+        }
+
         return changed
     }
 
@@ -165,6 +168,7 @@ public final class SignalNode<T>: NodeWrapper {
             return _value
         }
         set {
+            if let equals, equals(_value, newValue) { return }
             _value = newValue
 
             if currentImmediateBatch == nil {
@@ -176,13 +180,22 @@ public final class SignalNode<T>: NodeWrapper {
             }
         }
     }
+
+    public var peak: T { _value }
+
     let equals: ((T, T) -> Bool)?
 
-    public init(_ value: T) {
+    public init(_ value: T, equals: ((T, T) -> Bool)?) {
         _value = value
-        equals = nil
+        self.equals = equals
         super.init()
         node.pointee.state = .clean
+    }
+}
+
+extension SignalNode where T: Equatable {
+    public convenience init(_ value: T) {
+        self.init(value, equals: ==)
     }
 }
 
@@ -204,9 +217,9 @@ public final class ComputedNode<T>: NodeWrapper {
         return _value!
     }
 
-    public init(_ computation: @escaping () -> T) {
+    public init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
         self.computation = computation
-        equals = nil
+        self.equals = equals
         super.init()
     }
 
@@ -222,8 +235,16 @@ public final class ComputedNode<T>: NodeWrapper {
         defer { currentSinkNode = prev }
 
         node.unlinkSources()
-        _value = computation()
+        let newValue = computation()
+        if let old = _value, let equals, equals(old, newValue) { return false }
+        _value = newValue
         return true
+    }
+}
+
+extension ComputedNode where T: Equatable {
+    public convenience init(_ computation: @escaping () -> T) {
+        self.init(computation, equals: ==)
     }
 }
 
