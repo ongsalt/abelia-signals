@@ -17,7 +17,7 @@ struct Node {
 
     // or array + swap remove. also store back index, iterate a lot
     // or make a `DenseSlotMap`
-    // [sink: `sources` duplicate count] 
+    // [sink: `sources` duplicate count]
     @usableFromInline
     var sinks: [NodeRef: Int] = [:]  // this still cause refcount
     // in read order, reused by position across reruns (see `trackRead`)
@@ -263,36 +263,68 @@ public class NodeWrapper {
 }
 
 public final class SignalNode<T>: NodeWrapper {
+    // unchecked: `isUpdating` below is the manual exclusivity check. every access to `_value`
+    // is instantaneous except `update`'s inout, and nothing else may touch it meanwhile
     @usableFromInline
     @exclusivity(unchecked)
     var _value: T
 
+    // true while `update` holds `&_value`, like `RefCell`'s mutable borrow flag
+    @usableFromInline
+    @exclusivity(unchecked)
+    var isUpdating = false
+
     @inlinable
     public var value: T {
         get {
+            checkNotUpdating()
             // this should start an immediate effect batch
             currentSinkNode?.trackRead(node)
             return _value
         }
         set {
+            checkNotUpdating()
             if let equals, equals(_value, newValue) { return }
             _value = newValue
-
-            // nobody to notify: skip the batch and the walk
-            if node.pointee.sinks.isEmpty { return }
-
-            if currentImmediateBatch == nil {
-                batch {
-                    node.propagate()
-                }
-            } else {
-                node.propagate()
-            }
+            notifySinks()
         }
     }
 
     @inlinable
-    public var peak: T { _value }
+    public var peak: T {
+        checkNotUpdating()
+        return _value
+    }
+
+    /// Mutates the value in place (no copy-on-write copy for collections), then notifies sinks
+    /// without the `equals` check, so it always propagates.
+    @inlinable
+    public func update<R, E>(_ body: (inout T) throws(E) -> R) throws(E) -> R {
+        checkNotUpdating()
+        let result = try body(&_value)
+        // after clearing the flag: effects flushed by the batch may read this signal
+        notifySinks()
+        return result
+    }
+
+    @inlinable
+    func checkNotUpdating() {
+        if _slowPath(isUpdating) { signalAccessConflict() }
+    }
+
+    @inlinable
+    func notifySinks() {
+        // nobody to notify: skip the batch and the walk
+        if node.pointee.sinks.isEmpty { return }
+
+        if currentImmediateBatch == nil {
+            batch {
+                node.propagate()
+            }
+        } else {
+            node.propagate()
+        }
+    }
 
     @usableFromInline
     let equals: ((T, T) -> Bool)?
@@ -304,6 +336,13 @@ public final class SignalNode<T>: NodeWrapper {
         super.init()
         node.pointee.state = .clean
     }
+}
+
+// kept out of line so the check on the hot path is a load, a compare and a not-taken branch
+@usableFromInline
+@inline(never)
+func signalAccessConflict() -> Never {
+    fatalError("signal accessed while its `update` is still running")
 }
 
 extension SignalNode where T: Equatable {
