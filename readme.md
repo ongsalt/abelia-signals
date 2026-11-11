@@ -152,7 +152,7 @@ cd bench-js && npm run bench:bun                  # ... or Bun
 - threadlocal c shim
 
 ## Bugs
-- `Effect.immediate` see glitched state. So we still need to batch this: wrap aroudn signal mutation call. then `batch {}` is neutral.
+- `Effect.immediate` see glitched state. So we still need to batch this: wrap around signal mutation call. then `batch {}` is neutral.
     - also need to filter out dead sink
 
 ## Optimization

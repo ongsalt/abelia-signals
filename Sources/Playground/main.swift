@@ -1,32 +1,14 @@
 import AbeliaSignals
 
-let a = Signal(1)
-let b = Signal(1)
+let a = SignalNode(1)
+let b = SignalNode(1)
 
-let c = Computed {
+let c = ComputedNode {
     a.value + b.value
 }
 
-// effect with no scope WILL be dropped
-let e1 = Effect.immediate {
+let e2 = EffectNode {
     print("[immediate] \(c.value)")
-}
-
-let e2 = Effect {
-    print("[isolated] \(c.value)")
-}
-
-let scheduler = EffectScheduler()
-let e3 = Effect(scheduler: scheduler) {
-    print("[manual] \(c.value)")
-}
-
-Task {
-    while !Task.isCancelled {
-        try await Task.sleep(for: .seconds(3))
-        print("[scheduler] flush")
-        scheduler.flush()
-    }
 }
 
 Task {
