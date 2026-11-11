@@ -148,6 +148,13 @@ func runChecks() {
         startBatch()
         for _ in 0..<100 { a.value += 1 }
         endBatch()
+        #elseif V2
+        // v2 only has immediate effects; a batch is the equivalent
+        let e = Effect.immediate { runs += 1; blackHole(a.value) }
+        runs = 0
+        batch {
+            for _ in 0..<100 { a.value += 1 }
+        }
         #else
         let scheduler = EffectScheduler()
         let e = Effect(scheduler: scheduler) { runs += 1; blackHole(a.value) }
@@ -182,6 +189,20 @@ func runChecks() {
         let d = Computed { b.value &+ c.value }
         for _ in 0..<5 {
             a.value += 1
+            blackHole(d.value)
+        }
+        return d.value
+    }
+
+    // b is recomputed by the first reader; the second reader must still see that it changed
+    check("still live: shared computed, second reader after 5 writes", expected: 5 + 1 + 2) {
+        let a = Signal(0)
+        let b = Computed { a.value &+ 1 }
+        let c = Computed { b.value &+ 1 }
+        let d = Computed { b.value &+ 2 }
+        for _ in 0..<5 {
+            a.value += 1
+            blackHole(c.value)
             blackHole(d.value)
         }
         return d.value

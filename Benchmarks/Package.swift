@@ -51,6 +51,18 @@ let package = Package(
             linkerSettings: [.linkedLibrary("m")],
         ),
 
+        // same sources as Benchmark (symlinked), compiled against Reactivity2's node API
+        .executableTarget(
+            name: "BenchmarkV2",
+            dependencies: [
+                .product(name: "AbeliaSignals", package: "abelia-signals")
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+                .define("V2"),
+            ],
+        ),
+
         // a subset of the suite on Compute: no effects, no create benchmarks
         .executableTarget(
             name: "BenchmarkCompute",
