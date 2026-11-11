@@ -17,20 +17,21 @@ struct Node {
 
     // or array + swap remove. also store back index, iterate a lot
     // or make a `DenseSlotMap`
+    // [sink: `sources` duplicate count] 
     @usableFromInline
-    var sinks: Set<NodeRef> = []  // this still cause refcount
-    // allow duplicate, dedup when propagate
+    var sinks: [NodeRef: Int] = [:]  // this still cause refcount
+    // in read order, reused by position across reruns (see `trackRead`)
     @usableFromInline
     var sources: [NodeRef] = []  // this also cause refcount
+
+    @usableFromInline
+    var trackingIndex: Int = 0
 
     // Node address is NOT stable, but no handle are needed cuz we have back pointer to report this to wrapper
     @usableFromInline
     var owner: Unmanaged<NodeWrapper>
-    // dirty callback for effect
+    // own dirty callback for effect
 
-    // update callback for computed, return `changed?`. called with `owner`.
-    // built in each subclass's `@inlinable` init, where `T` is concrete, so the call
-    // lands in specialized code instead of the unspecialized `ComputedNode<T>` vtable entry
     @usableFromInline
     let update: (NodeWrapper) -> Bool
 
@@ -47,10 +48,45 @@ struct Node {
 typealias NodeRef = UnsafeMutablePointer<Node>
 
 extension NodeRef {
+    // same as v1: a rerun overwrites `sources` slot by slot, so reading the same deps in the
+    // same order touches no links at all; only a slot that changed is unlinked/relinked
     @inlinable
     func trackRead(_ source: NodeRef) {
-        pointee.sources.append(source)
-        source.addSink(self)
+        let i = pointee.trackingIndex
+
+        // dedup: same as the previous read, already linked
+        if i > 0, pointee.sources[i - 1] == source { return }
+
+        if i == pointee.sources.count {
+            // larger than before
+            pointee.sources.append(source)
+            source.addSink(self)
+        } else if pointee.sources[i] != source {
+            // overwrite
+            pointee.sources[i].removeSink(self)
+            pointee.sources[i] = source
+            source.addSink(self)
+        }
+
+        pointee.trackingIndex = i + 1
+    }
+
+    // run `body` as the current sink: reads inside it fill `sources` from slot 0,
+    // and every slot past what this run read is unlinked afterwards
+    @inlinable
+    func withTracking<R>(_ body: () -> R) -> R {
+        let prev = currentSinkNode
+        currentSinkNode = self
+        defer { currentSinkNode = prev }
+
+        pointee.trackingIndex = 0
+        let result = body()
+
+        let keep = pointee.trackingIndex
+        while pointee.sources.count > keep {
+            pointee.sources.removeLast().removeSink(self)
+        }
+        return result
     }
 
     @inlinable
@@ -60,14 +96,19 @@ extension NodeRef {
             _ = pointee.owner.retain()
         }
 
-        pointee.sinks.insert(sink)
+        pointee.sinks[sink, default: 0] += 1
     }
 
     @inlinable
     func removeSink(_ sink: NodeRef) {
-        // `sources` keeps duplicates, so this can run again for a sink that's already gone;
-        // only the removal that empties the set may release
-        if pointee.sinks.remove(sink) != nil, pointee.sinks.isEmpty {
+        guard let count = pointee.sinks[sink] else { return }
+        if count > 1 {
+            pointee.sinks[sink] = count - 1
+            return
+        }
+
+        pointee.sinks[sink] = nil
+        if pointee.sinks.isEmpty {
             pointee.owner.release()
         }
     }
@@ -75,7 +116,7 @@ extension NodeRef {
     // should not be recursive
     @inlinable
     func propagate() {
-        var next = Array(pointee.sinks)
+        var next = Array(pointee.sinks.keys)
         var directSinkLeft = next.count
 
         while let top = next.popLast() {
@@ -99,7 +140,7 @@ extension NodeRef {
                 s.becameDirty(confident: isDirectSink)
             }
 
-            for sink in top.pointee.sinks {
+            for sink in top.pointee.sinks.keys {
                 next.append(sink)
             }
         }
@@ -158,7 +199,7 @@ extension NodeRef {
         // we are clean now, so a sink pulling us later gets `false` back;
         // tell the ones still waiting that we really changed
         if changed {
-            for sink in pointee.sinks where sink.pointee.state == .maybe {
+            for sink in pointee.sinks.keys where sink.pointee.state == .maybe {
                 sink.pointee.state = .dirty
             }
         }
@@ -302,12 +343,7 @@ public final class ComputedNode<T>: NodeWrapper {
 
     @inlinable
     func update() -> Bool {
-        let prev = currentSinkNode
-        currentSinkNode = node
-        defer { currentSinkNode = prev }
-
-        node.unlinkSources()
-        let newValue = computation()
+        let newValue = node.withTracking(computation)
         if let old = _value, let equals, equals(old, newValue) { return false }
         _value = newValue
         return true
@@ -362,12 +398,7 @@ public final class EffectNode: NodeWrapper {
         let shouldRun = force || isReallyDirty || node.pull()
         if !shouldRun { return }
 
-        let prev = currentSinkNode
-        currentSinkNode = node
-        defer { currentSinkNode = prev }
-
-        node.unlinkSources()
-        effect()
+        node.withTracking(effect)
     }
 }
 
