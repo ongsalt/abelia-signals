@@ -30,14 +30,18 @@ struct Node {
     // Node address is NOT stable, but no handle are needed cuz we have back pointer to report this to wrapper
     @usableFromInline
     var owner: Unmanaged<NodeWrapper>
-    // own dirty callback for effect
 
     @usableFromInline
     let update: (NodeWrapper) -> Bool
 
+    // `owner.becameDirty` is only called for effects
+    @usableFromInline
+    let isEffect: Bool
+
     @inlinable
-    init(owner: Unmanaged<NodeWrapper>, update: @escaping (NodeWrapper) -> Bool) {
+    init(owner: Unmanaged<NodeWrapper>, isEffect: Bool, update: @escaping (NodeWrapper) -> Bool) {
         self.owner = owner
+        self.isEffect = isEffect
         self.update = update
     }
 }
@@ -140,8 +144,11 @@ extension NodeRef {
             pointee.state = direct ? .dirty : .maybe
         }
 
-        pointee.owner._withUnsafeGuaranteedRef { s in
-            s.becameDirty(confident: direct)
+        // only effects react to being dirtied, skip the call for computeds
+        if pointee.isEffect {
+            pointee.owner._withUnsafeGuaranteedRef { s in
+                s.becameDirty(confident: direct)
+            }
         }
         return true
     }
@@ -230,9 +237,9 @@ public class NodeWrapper {
     var node: NodeRef
 
     @inlinable
-    init(update: @escaping (NodeWrapper) -> Bool = { _ in true }) {
+    init(isEffect: Bool = false, update: @escaping (NodeWrapper) -> Bool = { _ in true }) {
         node = .allocate(capacity: 1)
-        node.initialize(to: Node(owner: .passUnretained(self), update: update))
+        node.initialize(to: Node(owner: .passUnretained(self), isEffect: isEffect, update: update))
 
         // keep `self` alive only when other node depends on this
     }
@@ -374,7 +381,7 @@ public final class EffectNode: NodeWrapper {
     public init(immediate: Bool = true, effect: @escaping () -> Void) {
         self.immediate = immediate
         self.effect = effect
-        super.init()
+        super.init(isEffect: true)
         node.pointee.state = .dirty
         runEffect(force: true)
     }
