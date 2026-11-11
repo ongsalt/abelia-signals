@@ -180,6 +180,7 @@ nonisolated(unsafe) var currentImmediateBatch: [EffectNode]?
 
 public class NodeWrapper {
     @usableFromInline
+    @exclusivity(unchecked)
     var node: NodeRef
 
     @inlinable
@@ -197,7 +198,7 @@ public class NodeWrapper {
 
     // computed, return `changed?`
     @inlinable
-    func update() -> Bool { false }
+    func update() -> Bool { true }
 
     @inlinable
     public func dump() {
@@ -261,11 +262,12 @@ extension SignalNode where T: Equatable {
 
 public final class ComputedNode<T>: NodeWrapper {
     @usableFromInline
+    @exclusivity(unchecked)
     var _value: T?
     @usableFromInline
     let equals: ((T, T) -> Bool)?
     @usableFromInline
-    var computation: () -> T
+    let computation: () -> T
 
     @inlinable
     public var value: T {
@@ -318,9 +320,11 @@ public final class EffectNode: NodeWrapper {
     @usableFromInline
     let effect: () -> Void
     @usableFromInline
+    @exclusivity(unchecked)
     var immediate: Bool
 
     @usableFromInline
+    @exclusivity(unchecked)
     var isReallyDirty: Bool = false
 
     @inlinable
@@ -342,9 +346,6 @@ public final class EffectNode: NodeWrapper {
         }
         currentImmediateBatch!.append(self)
     }
-
-    @inlinable
-    override func update() -> Bool { true }
 
     @inlinable
     func runEffect(force: Bool = false) {
