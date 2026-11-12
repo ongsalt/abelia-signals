@@ -55,9 +55,11 @@ public final class EffectScopeNode {
         self.scopes = []
         self.cleanups = []
 
-        for effect in effects.reversed() { effect.disposeOwned() }
-        for scope in scopes.reversed() { scope.disposeOwned() }
-        for cleanup in cleanups.reversed() { cleanup() }
+        untracked {
+            for effect in effects.reversed() { effect.disposeOwned() }
+            for scope in scopes.reversed() { scope.disposeOwned() }
+            for cleanup in cleanups.reversed() { cleanup() }
+        }
     }
 
     // disposed by the parent, which drops its lists itself

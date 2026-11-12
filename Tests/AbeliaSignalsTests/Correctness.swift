@@ -451,6 +451,37 @@ struct Correctness {
         blackHole(outer)
     }
 
+    @Test("batch: an effect dropped while queued does not run")
+    func droppedWhileQueued() {
+        let a = Signal(0)
+        var runs = 0
+        var e: EffectNode? = Effect.immediate { runs += 1; blackHole(a.value) }
+        runs = 0
+        batch {
+            a.value += 1  // queues e
+            e = nil  // last handle gone: only the queue still holds it
+        }
+        #expect(runs == 0)
+        blackHole(e)
+    }
+
+    @Test("scope: what cleanups read isn't tracked into the effect that disposes")
+    func cleanupReadsUntracked() {
+        let x = Signal(0)
+        let trigger = Signal(0)
+        var outerRuns = 0
+        let victim = Effect.immediate { onCleanup { blackHole(x.value) } }
+        let outer = Effect.immediate {
+            outerRuns += 1
+            if trigger.value == 1 { victim.dispose() }  // the cleanup runs inside outer's body
+        }
+        trigger.value = 1
+        outerRuns = 0
+        x.value += 1  // outer itself never read x
+        #expect(outerRuns == 0)
+        blackHole(outer)
+    }
+
     @Test("scope: onCleanup in an effect runs before each rerun and on dispose")
     func effectCleanup() {
         let a = Signal(0)

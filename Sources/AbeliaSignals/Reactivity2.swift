@@ -603,6 +603,12 @@ public func batch<T>(body: () -> T) -> T {
         // allow effect to write signal without crashing
         var i = 0
         while i < queue.pointee.count {
+            // the queue holding the last reference means nobody owns the effect any more
+            // (no handle, no scope; the graph never retains effects): skip it, it dies with the queue
+            if isKnownUniquelyReferenced(&queue.pointee[i]) {
+                i += 1
+                continue
+            }
             let effect = queue.pointee[i]
             i += 1
             effect.runEffect()

@@ -17,3 +17,11 @@ var currentScopeNode: EffectScopeNode? {
     get { abelia_tls_current_scope.map { Unmanaged<EffectScopeNode>.fromOpaque($0).takeUnretainedValue() } }
     set { abelia_tls_current_scope = newValue.map { Unmanaged.passUnretained($0).toOpaque() } }
 }
+
+@inlinable
+public func untracked<R, E>(_ body: () throws(E) -> R) throws(E) -> R {
+    let prev = currentSinkNode
+    currentSinkNode = nil
+    defer { currentSinkNode = prev }
+    return try body()
+}
