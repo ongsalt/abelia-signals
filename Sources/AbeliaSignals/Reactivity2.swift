@@ -4,8 +4,6 @@ class Runtime {
     // global/ambient state needed: 
     // - current sink: transient tls
     // - current effect scope: transient tls
-    // - 
-    // TODO: arena with topological sorting
 }
 
 @usableFromInline
@@ -31,16 +29,11 @@ struct Node {
     @usableFromInline
     var trackingIndex: Int = 0
 
-    // Node address is NOT stable, but no handle are needed cuz we have back pointer to report this to wrapper
-    @usableFromInline
-    var owner: Unmanaged<NodeWrapper>
-
     @usableFromInline
     let update: (NodeWrapper) -> Bool
 
     @inlinable
-    init(owner: Unmanaged<NodeWrapper>, isEffect: Bool, update: @escaping (NodeWrapper) -> Bool) {
-        self.owner = owner
+    init(isEffect: Bool, update: @escaping (NodeWrapper) -> Bool) {
         self.flags = isEffect ? [.dirty, .effect] : [.dirty]
         self.update = update
     }
@@ -123,7 +116,16 @@ struct Edge {
     }
 }
 
+// object header is 2 words: (metadata pointer, refcount)
+@inlinable
+var nodeHeaderSize: Int { 2 * MemoryLayout<UnsafeRawPointer>.size }
+
 extension NodeRef {
+    @inlinable
+    var owner: Unmanaged<NodeWrapper> {
+        Unmanaged.fromOpaque(UnsafeRawPointer(self) - nodeHeaderSize)
+    }
+
     @inlinable
     func trackRead(_ source: NodeRef) {
         let i = pointee.trackingIndex
@@ -166,7 +168,7 @@ extension NodeRef {
         let j = source.pointee.sinks.count
         // the graph keeps a source alive while anything depends on it
         if j == 0 {
-            _ = source.pointee.owner.retain()
+            _ = source.owner.retain()
         }
         source.pointee.sinks.append(Edge(node: self, slot: i))
         pointee.sources[i] = Edge(node: source, slot: j)
@@ -186,7 +188,7 @@ extension NodeRef {
         source.pointee.sinks.removeLast()
 
         if last == 0 {
-            source.pointee.owner.release()
+            source.owner.release()
         }
     }
 
@@ -230,7 +232,7 @@ extension NodeRef {
         }
 
         if pointee.isEffect {
-            pointee.owner._withUnsafeGuaranteedRef { s in
+            owner._withUnsafeGuaranteedRef { s in
                 s.becameDirty(confident: direct)
             }
         }
@@ -280,7 +282,7 @@ extension NodeRef {
     // state == .dirty or a source changed
     @inlinable
     func recompute() -> Bool {
-        let changed = pointee.owner._withUnsafeGuaranteedRef { s in
+        let changed = owner._withUnsafeGuaranteedRef { s in
             pointee.update(s)
         }
 
@@ -312,14 +314,27 @@ extension NodeRef {
 }
 
 public class NodeWrapper {
+    // inlineeee
     @usableFromInline
     @exclusivity(unchecked)
-    var node: NodeRef
+    var storage: Node
+
+    /// Pointer to the inline `Node`. Stable for the object's lifetime: objects don't move.
+    @inlinable
+    var node: NodeRef {
+        // first and only stored property
+        _getUnsafePointerToStoredProperties(self).assumingMemoryBound(to: Node.self)
+    }
 
     @inlinable
     init(isEffect: Bool = false, update: @escaping (NodeWrapper) -> Bool = { _ in true }) {
-        node = .allocate(capacity: 1)
-        node.initialize(to: Node(owner: .passUnretained(self), isEffect: isEffect, update: update))
+        storage = Node(isEffect: isEffect, update: update)
+        // the layout assumptions `node` and `NodeRef.owner` rely on
+        assert(withUnsafeMutablePointer(to: &storage) { $0 } == node, "storage isn't the first stored property")
+        assert(
+            UnsafeRawPointer(node) - nodeHeaderSize == UnsafeRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            "object header isn't nodeHeaderSize bytes"
+        )
 
         // keep `self` alive only when other node depends on this
     }
@@ -337,8 +352,6 @@ public class NodeWrapper {
     deinit {
         assert(node.pointee.sinks.isEmpty)
         node.unlinkSources()
-        node.deinitialize(count: 1)
-        node.deallocate()
     }
 }
 
