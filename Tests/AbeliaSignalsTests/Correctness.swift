@@ -482,6 +482,26 @@ struct Correctness {
         blackHole(outer)
     }
 
+    @Test("scope: an effect disposing itself mid-run ignores the rest of its reads")
+    func selfDisposeMidRun() {
+        let a = Signal(0)
+        let b = Signal(0)
+        var runs = 0
+        var me: EffectNode?
+        let e = Effect.immediate {
+            runs += 1
+            blackHole(a.value)
+            me?.dispose()
+            blackHole(b.value)  // after dispose: not tracked
+        }
+        me = e
+        a.value += 1  // reruns, disposes itself, then reads b
+        runs = 0
+        b.value += 1
+        a.value += 1
+        #expect(runs == 0)
+    }
+
     @Test("scope: onCleanup in an effect runs before each rerun and on dispose")
     func effectCleanup() {
         let a = Signal(0)

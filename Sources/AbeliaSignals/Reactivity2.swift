@@ -252,6 +252,8 @@ extension NodeRef {
             i -= 1
         }
         pointee.sources = []
+        // a run still in progress (a node disposed mid-run) must not index past the end
+        pointee.trackingIndex = 0
     }
 }
 
@@ -529,6 +531,9 @@ public final class EffectNode: NodeWrapper {
         if isDisposed { return }
         isDisposed = true
         scope = nil
+        // disposed mid-run: the rest of the body reads untracked (withTracking restores the
+        // outer sink when the run ends)
+        if currentSinkNode == node { currentSinkNode = nil }
         node.unlinkSources()
         innerScope.reset()
     }
