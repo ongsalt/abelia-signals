@@ -1,57 +1,100 @@
-// Line-by-line port of alien-signals 3.2.1 `esm/index.mjs` (MIT).
+// Port of alien-signals 3.2.1 `esm/index.mjs` (MIT), same algorithm, tuned for Swift.
 // Benchmark baseline only, see System.swift.
 //
 // Differences forced by Swift:
 //   - `signal()` / `computed()` return objects with `.value` instead of callable functions
-//   - `'getter' in node` dispatch is class overrides of `update()` / `unwatched()`
 //   - values compare with `!=` (Equatable) where JS uses `!==`
 // Not ported: isSignal/isComputed/..., effect cleanups (v3's `fn` may return one),
 // computed `getter(previousValue)`.
 
 let HasChildEffect = 64
 
+@exclusivity(unchecked)
 nonisolated(unsafe) var cycle = 0
-nonisolated(unsafe) var runDepth = 0
-nonisolated(unsafe) var batchDepth = 0
-nonisolated(unsafe) var notifyIndex = 0
-nonisolated(unsafe) var queuedLength = 0
-nonisolated(unsafe) var activeSub: ReactiveNode?
-nonisolated(unsafe) var queued: [ReactiveNode?] = []
 
-func notify(_ start: ReactiveNode) {
-    var effect: ReactiveNode? = start
+@exclusivity(unchecked)
+nonisolated(unsafe) var runDepth = 0
+
+@exclusivity(unchecked)
+nonisolated(unsafe) var batchDepth = 0
+
+@exclusivity(unchecked)
+nonisolated(unsafe) var notifyIndex = 0
+
+@exclusivity(unchecked)
+nonisolated(unsafe) var queuedLength = 0
+
+@usableFromInline
+@exclusivity(unchecked)
+nonisolated(unsafe) var activeSub: NodePtr? = nil
+
+// each queued effect's object is retained (JS: the array keeps it alive)
+@exclusivity(unchecked)
+nonisolated(unsafe) var queued: ContiguousArray<NodePtr?> = []
+
+// MARK: the callbacks handed to createReactiveSystem
+
+func update(_ node: NodePtr) -> Bool {
+    switch node.pointee.kind {
+    case .computed:
+        return updateComputed(node)
+    case .signal:
+        return updateSignal(node)
+    default:
+        node.pointee.flags = 1
+        return true
+    }
+}
+
+func notify(_ start: NodePtr) {
+    var effect: NodePtr? = start
     var insertIndex = queuedLength
     var firstInsertedIndex = insertIndex
     repeat {
+        let e = effect!
+        _ = e.pointee.object.retain()
         if insertIndex == queued.count {
-            queued.append(effect)
+            queued.append(e)
         } else {
-            queued[insertIndex] = effect
+            queued[insertIndex] = e
         }
         insertIndex += 1
-        effect!.flags &= ~2
-        effect = effect!.subs?.sub
-        if effect == nil || effect!.flags & 2 == 0 {
+        e.pointee.flags &= ~2
+        // JS: effect.subs?.sub, the first subscriber
+        effect = e.pointee.sinkCount > 0 ? e.pointee.sinks[0].sub : nil
+        if effect == nil || effect!.pointee.flags & 2 == 0 {
             break
         }
     } while true
     queuedLength = insertIndex
     insertIndex -= 1
     while firstInsertedIndex < insertIndex {
-        let left = queued[firstInsertedIndex]
-        queued[firstInsertedIndex] = queued[insertIndex]
+        queued.swapAt(firstInsertedIndex, insertIndex)
         firstInsertedIndex += 1
-        queued[insertIndex] = left
         insertIndex -= 1
     }
 }
 
-public func getActiveSub() -> ReactiveNode? {
-    activeSub
+func unwatched(_ node: NodePtr) {
+    switch node.pointee.kind {
+    case .computed:
+        if node.pointee.depsTail != nil {
+            node.pointee.flags = 1 | 16
+            disposeAllDepsInReverse(node)
+        }
+    case .signal:
+        break
+    case .effect:
+        effectOper(node)
+    case .scope, .trigger:
+        effectScopeOper(node)
+    }
 }
 
+// MARK: exports
+
 @discardableResult
-public func setActiveSub(_ sub: ReactiveNode?) -> ReactiveNode? {
+func setActiveSub(_ sub: NodePtr?) -> NodePtr? {
     let prevSub = activeSub
     activeSub = sub
     return prevSub
@@ -73,118 +116,90 @@ public func endBatch() {
 }
 
 public final class Signal<T: Equatable>: ReactiveNode {
+    @usableFromInline
+    @exclusivity(unchecked)
     var currentValue: T
+
+    @usableFromInline
+    @exclusivity(unchecked)
     var pendingValue: T
 
+    @inlinable
     public init(_ initialValue: T) {
         currentValue = initialValue
         pendingValue = initialValue
-        super.init(flags: 1)
-    }
-
-    override func update() -> Bool {
-        updateSignal(self)
+        super.init(kind: .signal, flags: 1) { node in
+            // updateSignal: currentValue !== (currentValue = pendingValue)
+            let s = unsafeDowncast(node, to: Signal<T>.self)
+            let changed = s.currentValue != s.pendingValue
+            s.currentValue = s.pendingValue
+            return changed
+        }
     }
 
     // signalOper
+    @inlinable
     public var value: T {
         get {
-            if flags & 16 != 0 {
-                if updateSignal(self) {
-                    let subs = self.subs
-                    if subs != nil {
-                        shallowPropagate(subs!)
-                    }
-                }
-            }
-            let sub = activeSub
-            if sub != nil {
-                link(self, sub!, cycle)
+            if node.pointee.flags & 16 != 0 || activeSub != nil {
+                signalRead(node)
             }
             return currentValue
         }
         set {
             if pendingValue != newValue {
                 pendingValue = newValue
-                flags = 1 | 16
-                let subs = self.subs
-                if subs != nil {
-                    propagate(subs!, runDepth != 0)
-                    if batchDepth == 0 {
-                        flush()
-                    }
-                }
+                signalWrite(node)
             }
         }
     }
 
     // not in alien-signals: same work as AbeliaSignals' `peek`, plus committing a pending write
+    @inlinable
     public var peek: T {
-        if flags & 16 != 0 {
-            if updateSignal(self) {
-                let subs = self.subs
-                if subs != nil {
-                    shallowPropagate(subs!)
-                }
-            }
+        if node.pointee.flags & 16 != 0 {
+            signalCommit(node)
         }
         return currentValue
     }
 }
 
 public final class Computed<T: Equatable>: ReactiveNode {
-    var _value: T?
+    @usableFromInline
+    @exclusivity(unchecked)
+    var _value: T? = nil
+
+    @usableFromInline
     let getter: () -> T
 
+    @inlinable
     public init(_ getter: @escaping () -> T) {
         self.getter = getter
-        super.init(flags: 0)
-    }
-
-    override func update() -> Bool {
-        updateComputed(self)
-    }
-
-    override func unwatched() {
-        if depsTail != nil {
-            flags = 1 | 16
-            disposeAllDepsInReverse(self)
+        super.init(kind: .computed, flags: 0) { node in
+            // oldValue !== (c.value = c.getter(oldValue))
+            let c = unsafeDowncast(node, to: Computed<T>.self)
+            let oldValue = c._value
+            let newValue = c.getter()
+            c._value = newValue
+            return oldValue != newValue
         }
     }
 
     // computedOper
+    @inlinable
     public var value: T {
-        let flags = self.flags
-        if flags & 16 != 0
-            || (flags & 32 != 0
-                && (checkDirty(deps!, self)
-                    || { self.flags = flags & ~32; return false }()))
-        {
-            if updateComputed(self) {
-                let subs = self.subs
-                if subs != nil {
-                    shallowPropagate(subs!)
-                }
-            }
-        } else if flags == 0 {
-            self.flags = 1 | 4
-            let prevSub = setActiveSub(self)
-            _value = getter()
-            activeSub = prevSub
-            self.flags &= ~4
-        }
-        let sub = activeSub
-        if sub != nil {
-            link(self, sub!, cycle)
-        }
+        computedOper(node)
         return _value!
     }
 
     // not in alien-signals: an untracked read, for the shared suite
+    @inlinable
     public var peek: T {
-        let prevSub = setActiveSub(nil)
-        defer { activeSub = prevSub }
-        return value
+        let prevSub = activeSub
+        activeSub = nil
+        computedOper(node)
+        activeSub = prevSub
+        return _value!
     }
 }
 
@@ -193,16 +208,12 @@ public final class Effect: ReactiveNode {
 
     init(_ fn: @escaping () -> Void) {
         self.fn = fn
-        super.init(flags: 2 | 4)
-    }
-
-    override func unwatched() {
-        effectOper(self)
+        super.init(kind: .effect, flags: 2 | 4) { _ in false }
     }
 
     // calling the returned function in JS
     public func dispose() {
-        effectOper(self)
+        effectOper(node)
     }
 
     // same spelling as AbeliaSignals, so the benchmark suite compiles against both
@@ -213,42 +224,44 @@ public final class Effect: ReactiveNode {
 
 public final class EffectScope: ReactiveNode {
     init() {
-        super.init(flags: 1)
-    }
-
-    override func unwatched() {
-        effectScopeOper(self)
+        super.init(kind: .scope, flags: 1) { _ in false }
     }
 
     // calling the returned function in JS
     public func dispose() {
-        effectScopeOper(self)
+        effectScopeOper(node)
+    }
+}
+
+final class TriggerNode: ReactiveNode {
+    init() {
+        super.init(kind: .trigger, flags: 2) { _ in false }
     }
 }
 
 @discardableResult
 public func effect(_ fn: @escaping () -> Void) -> Effect {
     let e = Effect(fn)
-    let prevSub = setActiveSub(e)
-    if prevSub != nil {
-        link(e, prevSub!, 0)
-        prevSub!.flags |= HasChildEffect
+    let prevSub = setActiveSub(e.node)
+    if let prevSub {
+        link(e.node, prevSub, 0)
+        prevSub.pointee.flags |= HasChildEffect
     }
     runDepth += 1
     e.fn()
     runDepth -= 1
     activeSub = prevSub
-    e.flags &= ~4
+    e.node.pointee.flags &= ~4
     return e
 }
 
 @discardableResult
 public func effectScope(_ fn: () -> Void) -> EffectScope {
     let e = EffectScope()
-    let prevSub = setActiveSub(e)
-    if prevSub != nil {
-        link(e, prevSub!, 0)
-        prevSub!.flags |= HasChildEffect
+    let prevSub = setActiveSub(e.node)
+    if let prevSub {
+        link(e.node, prevSub, 0)
+        prevSub.pointee.flags |= HasChildEffect
     }
     fn()
     activeSub = prevSub
@@ -256,87 +269,84 @@ public func effectScope(_ fn: () -> Void) -> EffectScope {
 }
 
 public func trigger(_ fn: () -> Void) {
-    let sub = ReactiveNode(flags: 2)
-    let prevSub = setActiveSub(sub)
-    fn()
-    activeSub = prevSub
-    sub.flags = 0
-    var link = sub.deps
-    while link != nil {
-        let dep = link!.dep
-        link = unlink(link!, sub)
-        let subs = dep.subs
-        if subs != nil {
-            propagate(subs!, runDepth != 0)
-            shallowPropagate(subs!)
+    let trigger = TriggerNode()
+    withExtendedLifetime(trigger) {
+        let sub = trigger.node
+        let prevSub = setActiveSub(sub)
+        fn()
+        activeSub = prevSub
+        sub.pointee.flags = 0
+        var link = sub.pointee.deps
+        while let l = link {
+            // JS keeps `dep` alive through the GC; the link may hold the last reference
+            let dep = l.pointee.dep
+            let object = dep.pointee.object.retain()
+            link = unlink(l, sub)
+            if dep.pointee.sinkCount > 0 {
+                propagate(dep, runDepth != 0)
+                shallowPropagate(dep)
+            }
+            object.release()
         }
-    }
-    if batchDepth == 0 {
-        flush()
+        if batchDepth == 0 {
+            flush()
+        }
     }
 }
 
-func updateComputed<T>(_ c: Computed<T>) -> Bool {
-    if c.flags & HasChildEffect != 0 {
-        var link = c.depsTail
-        while link != nil {
-            let prev = link!.prevDep
-            let dep = link!.dep
-            if dep is Effect || dep is EffectScope {
-                unlink(link!, c)
-            }
-            link = prev
-        }
+// MARK: internals
+
+func updateComputed(_ c: NodePtr) -> Bool {
+    if c.pointee.flags & HasChildEffect != 0 {
+        unlinkChildEffects(c)
     }
-    c.depsTail = nil
-    c.flags = 1 | 4
+    c.pointee.depsTail = nil
+    c.pointee.flags = 1 | 4
     let prevSub = setActiveSub(c)
     cycle += 1
-    let oldValue = c._value
-    c._value = c.getter()
-    let changed = oldValue != c._value
+    let changed = c.pointee.object._withUnsafeGuaranteedRef { $0.apply($0) }
     activeSub = prevSub
-    c.flags &= ~4
+    c.pointee.flags &= ~4
     purgeDeps(c)
     return changed
 }
 
-func updateSignal<T>(_ s: Signal<T>) -> Bool {
-    s.flags = 1
-    let changed = s.currentValue != s.pendingValue
-    s.currentValue = s.pendingValue
-    return changed
+func updateSignal(_ s: NodePtr) -> Bool {
+    s.pointee.flags = 1
+    return s.pointee.object._withUnsafeGuaranteedRef { $0.apply($0) }
 }
 
-func run(_ e: Effect) {
-    let flags = e.flags
-    if flags & 16 != 0
-        || (flags & 32 != 0
-            && checkDirty(e.deps!, e))
-    {
+func run(_ e: NodePtr) {
+    let flags = e.pointee.flags
+    if flags & 16 != 0 || (flags & 32 != 0 && checkDirty(e.pointee.deps!, e)) {
         if flags & HasChildEffect != 0 {
-            var link = e.depsTail
-            while link != nil {
-                let prev = link!.prevDep
-                let dep = link!.dep
-                if dep is Effect || dep is EffectScope {
-                    unlink(link!, e)
-                }
-                link = prev
-            }
+            unlinkChildEffects(e)
         }
-        e.depsTail = nil
-        e.flags = 2 | 4
+        e.pointee.depsTail = nil
+        e.pointee.flags = 2 | 4
         let prevSub = setActiveSub(e)
         cycle += 1
         runDepth += 1
-        e.fn()
+        e.pointee.object._withUnsafeGuaranteedRef { unsafeDowncast($0, to: Effect.self).fn() }
         runDepth -= 1
         activeSub = prevSub
-        e.flags &= ~4
+        e.pointee.flags &= ~4
         purgeDeps(e)
-    } else if e.deps != nil {
-        e.flags = 2 | (flags & HasChildEffect)
+    } else if e.pointee.deps != nil {
+        e.pointee.flags = 2 | (flags & HasChildEffect)
+    }
+}
+
+// the HasChildEffect loop shared by updateComputed and run
+private func unlinkChildEffects(_ sub: NodePtr) {
+    var link = sub.pointee.depsTail
+    while let l = link {
+        let prev = l.pointee.prevDep
+        let kind = l.pointee.dep.pointee.kind
+        if kind != .computed && kind != .signal {
+            unlink(l, sub)
+        }
+        link = prev
     }
 }
 
@@ -345,39 +355,98 @@ func flush() {
         let effect = queued[notifyIndex]!
         queued[notifyIndex] = nil
         notifyIndex += 1
-        run(effect as! Effect)
+        run(effect)
+        effect.pointee.object.release()
     }
     // JS's `finally` re-queues effects left behind by a throw; nothing here throws
     notifyIndex = 0
     queuedLength = 0
 }
 
-func effectOper(_ e: ReactiveNode) {
-    effectScopeOper(e)
-}
-
-func effectScopeOper(_ e: ReactiveNode) {
-    e.flags = 0
-    disposeAllDepsInReverse(e)
-    let sub = e.subs
-    if sub != nil {
-        unlink(sub!)
+@usableFromInline
+func computedOper(_ c: NodePtr) {
+    let flags = c.pointee.flags
+    var shouldUpdate = flags & 16 != 0
+    if !shouldUpdate && flags & 32 != 0 {
+        if checkDirty(c.pointee.deps!, c) {
+            shouldUpdate = true
+        } else {
+            c.pointee.flags = flags & ~32
+        }
+    }
+    if shouldUpdate {
+        if updateComputed(c) {
+            if c.pointee.sinkCount > 0 {
+                shallowPropagate(c)
+            }
+        }
+    } else if flags == 0 {
+        c.pointee.flags = 1 | 4
+        let prevSub = setActiveSub(c)
+        _ = c.pointee.object._withUnsafeGuaranteedRef { $0.apply($0) }
+        activeSub = prevSub
+        c.pointee.flags &= ~4
+    }
+    if let sub = activeSub {
+        link(c, sub, cycle)
     }
 }
 
-func disposeAllDepsInReverse(_ sub: ReactiveNode) {
-    var link = sub.depsTail
-    while link != nil {
-        let prev = link!.prevDep
-        unlink(link!, sub)
+@usableFromInline
+func signalRead(_ s: NodePtr) {
+    if s.pointee.flags & 16 != 0 {
+        signalCommit(s)
+    }
+    if let sub = activeSub {
+        link(s, sub, cycle)
+    }
+}
+
+@usableFromInline
+func signalCommit(_ s: NodePtr) {
+    if updateSignal(s) {
+        if s.pointee.sinkCount > 0 {
+            shallowPropagate(s)
+        }
+    }
+}
+
+@usableFromInline
+func signalWrite(_ s: NodePtr) {
+    s.pointee.flags = 1 | 16
+    if s.pointee.sinkCount > 0 {
+        propagate(s, runDepth != 0)
+        if batchDepth == 0 {
+            flush()
+        }
+    }
+}
+
+func effectOper(_ e: NodePtr) {
+    effectScopeOper(e)
+}
+
+func effectScopeOper(_ e: NodePtr) {
+    e.pointee.flags = 0
+    disposeAllDepsInReverse(e)
+    if e.pointee.sinkCount > 0 {
+        unlink(sink(e, 0))
+    }
+}
+
+func disposeAllDepsInReverse(_ sub: NodePtr) {
+    var link = sub.pointee.depsTail
+    while let l = link {
+        let prev = l.pointee.prevDep
+        unlink(l, sub)
         link = prev
     }
 }
 
-func purgeDeps(_ sub: ReactiveNode) {
-    let depsTail = sub.depsTail
-    var dep = depsTail != nil ? depsTail!.nextDep : sub.deps
-    while dep != nil {
-        dep = unlink(dep!, sub)
+func purgeDeps(_ sub: NodePtr) {
+    let depsTail = sub.pointee.depsTail
+    var dep = depsTail != nil ? depsTail!.pointee.nextDep : sub.pointee.deps
+    while let d = dep {
+        dep = unlink(d, sub)
     }
 }

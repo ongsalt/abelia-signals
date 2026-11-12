@@ -16,13 +16,26 @@ func benchmark(_ name: String, setup: @escaping () -> () -> Void) {
     registry.append(BenchmarkCase(name: name, setup: setup))
 }
 
+/// `filter`: nil runs everything, `--list` prints the case names, `=<name>` runs exactly that
+/// case, anything else runs the cases whose name contains it.
 func runBenchmarks(filter: String?) {
+    if filter == "--list" {
+        for bench in registry { print(bench.name) }
+        return
+    }
+
     let clock = ContinuousClock()
     let samples = 15
     let targetSampleTime = Duration.milliseconds(50)
 
+    func selected(_ name: String) -> Bool {
+        guard let filter else { return true }
+        if filter.hasPrefix("=") { return name == filter.dropFirst() }
+        return name.contains(filter)
+    }
+
     print(pad("benchmark", 44), pad("median", 12), pad("min", 12), "iters/sample")
-    for bench in registry where filter.map({ bench.name.contains($0) }) ?? true {
+    for bench in registry where selected(bench.name) {
         let op = bench.setup()
 
         // warmup + calibrate iterations so each sample takes ~targetSampleTime
