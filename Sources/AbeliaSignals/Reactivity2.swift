@@ -15,14 +15,12 @@ struct Node {
     //      - default effect is just a node with eager update flag
     //      - immediate effect batching is also outside the graph
 
-    // or array + swap remove. also store back index, iterate a lot
-    // or make a `DenseSlotMap`
-    // [sink: `sources` duplicate count]
+    // Solid-style edge lists. edge has back index + do swap remove
     @usableFromInline
-    var sinks: [NodeRef: Int] = [:]  // this still cause refcount
+    var sinks: [Edge] = []
     // in read order, reused by position across reruns (see `trackRead`)
     @usableFromInline
-    var sources: [NodeRef] = []  // this also cause refcount
+    var sources: [Edge] = []
 
     @usableFromInline
     var trackingIndex: Int = 0
@@ -51,23 +49,38 @@ struct Node {
 @usableFromInline
 typealias NodeRef = UnsafeMutablePointer<Node>
 
+@usableFromInline
+@frozen
+struct Edge {
+    @usableFromInline
+    var node: NodeRef
+    @usableFromInline
+    // back index
+    var slot: Int
+
+    @inlinable
+    init(node: NodeRef, slot: Int) {
+        self.node = node
+        self.slot = slot
+    }
+}
+
 extension NodeRef {
     @inlinable
     func trackRead(_ source: NodeRef) {
         let i = pointee.trackingIndex
 
         // dedup: same as the previous read, already linked
-        if i > 0, pointee.sources[i - 1] == source { return }
+        if i > 0, pointee.sources[i - 1].node == source { return }
 
         if i == pointee.sources.count {
             // larger than before
-            pointee.sources.append(source)
-            source.addSink(self)
-        } else if pointee.sources[i] != source {
+            pointee.sources.append(Edge(node: source, slot: 0))  // slot set by link
+            link(source, at: i)
+        } else if pointee.sources[i].node != source {
             // overwrite
-            pointee.sources[i].removeSink(self)
-            pointee.sources[i] = source
-            source.addSink(self)
+            unlink(at: i)
+            link(source, at: i)
         }
 
         pointee.trackingIndex = i + 1
@@ -84,32 +97,38 @@ extension NodeRef {
 
         let keep = pointee.trackingIndex
         while pointee.sources.count > keep {
-            pointee.sources.removeLast().removeSink(self)
+            unlink(at: pointee.sources.count - 1)
+            pointee.sources.removeLast()
         }
         return result
     }
 
     @inlinable
-    func addSink(_ sink: NodeRef) {
-        // retain
-        if pointee.sinks.isEmpty {
-            _ = pointee.owner.retain()
+    func link(_ source: NodeRef, at i: Int) {
+        let j = source.pointee.sinks.count
+        // the graph keeps a source alive while anything depends on it
+        if j == 0 {
+            _ = source.pointee.owner.retain()
         }
-
-        pointee.sinks[sink, default: 0] += 1
+        source.pointee.sinks.append(Edge(node: self, slot: i))
+        pointee.sources[i] = Edge(node: source, slot: j)
     }
 
     @inlinable
-    func removeSink(_ sink: NodeRef) {
-        guard let count = pointee.sinks[sink] else { return }
-        if count > 1 {
-            pointee.sinks[sink] = count - 1
-            return
-        }
+    func unlink(at i: Int) {
+        let source = pointee.sources[i].node
+        let j = pointee.sources[i].slot
+        let last = source.pointee.sinks.count - 1
 
-        pointee.sinks[sink] = nil
-        if pointee.sinks.isEmpty {
-            pointee.owner.release()
+        if j != last {
+            let moved = source.pointee.sinks[last]
+            source.pointee.sinks[j] = moved
+            moved.node.pointee.sources[moved.slot].slot = j
+        }
+        source.pointee.sinks.removeLast()
+
+        if last == 0 {
+            source.pointee.owner.release()
         }
     }
 
@@ -118,33 +137,38 @@ extension NodeRef {
     func propagate() {
         var next: [NodeRef] = []
 
-        for sink in pointee.sinks.keys where sink.markDirty(direct: true) {
-            for s in sink.pointee.sinks.keys { next.append(s) }
+        // by index: nothing here mutates the lists being walked
+        for k in pointee.sinks.indices {
+            let sink = pointee.sinks[k].node
+            if sink.markDirty(direct: true) {
+                for m in sink.pointee.sinks.indices {
+                    next.append(sink.pointee.sinks[m].node)
+                }
+            }
         }
 
         while let top = next.popLast() {
             if top.markDirty(direct: false) {
-                for s in top.pointee.sinks.keys { next.append(s) }
+                for m in top.pointee.sinks.indices {
+                    next.append(top.pointee.sinks[m].node)
+                }
             }
         }
     }
 
-    // mark one sink of a changed node: `.dirty` if it reads the changed node directly,
-    // `.maybe` otherwise. returns whether its own sinks still need marking
+    // returns: should mark sinks dirty
     @inlinable
     func markDirty(direct: Bool) -> Bool {
         switch pointee.state {
         case .dirty:
             return false
         case .maybe:
-            // already visited, its sinks are marked; a direct hit upgrades it
             if direct { pointee.state = .dirty }
             return false
         case .clean:
             pointee.state = direct ? .dirty : .maybe
         }
 
-        // only effects react to being dirtied, skip the call for computeds
         if pointee.isEffect {
             pointee.owner._withUnsafeGuaranteedRef { s in
                 s.becameDirty(confident: direct)
@@ -154,8 +178,6 @@ extension NodeRef {
     }
 
     // for computed to check dirty
-    // depth-first over `.maybe` sources with an explicit stack; `update` may still pull
-    // re-entrantly (a computation reading another computed), that starts its own walk
     @inlinable
     func pull() -> Bool {
         switch pointee.state {
@@ -184,7 +206,7 @@ extension NodeRef {
             }
 
             stack[stack.count - 1].next = next + 1
-            let source = node.pointee.sources[next]
+            let source = node.pointee.sources[next].node
             switch source.pointee.state {
             case .clean: break  // unchanged, signals are always here
             case .dirty: changed = source.recompute()
@@ -205,8 +227,9 @@ extension NodeRef {
         // we are clean now, so a sink pulling us later gets `false` back;
         // tell the ones still waiting that we really changed
         if changed {
-            for sink in pointee.sinks.keys where sink.pointee.state == .maybe {
-                sink.pointee.state = .dirty
+            for k in pointee.sinks.indices {
+                let sink = pointee.sinks[k].node
+                if sink.pointee.state == .maybe { sink.pointee.state = .dirty }
             }
         }
 
@@ -216,8 +239,11 @@ extension NodeRef {
 
     @inlinable
     func unlinkSources() {
-        for source in pointee.sources {
-            source.removeSink(self)
+        // back to front, so no unlink moves an edge of ours that's still to be visited
+        var i = pointee.sources.count - 1
+        while i >= 0 {
+            unlink(at: i)
+            i -= 1
         }
         pointee.sources = []
     }
@@ -263,19 +289,16 @@ public class NodeWrapper {
 }
 
 public final class SignalNode<T>: NodeWrapper {
-    // unchecked: `isUpdating` below is the manual exclusivity check. every access to `_value`
-    // is instantaneous except `update`'s inout, and nothing else may touch it meanwhile
     @usableFromInline
     @exclusivity(unchecked)
     var _value: T
 
-    // true while `update` holds `&_value`, like `RefCell`'s mutable borrow flag
+    // manual exclusivity check
     @usableFromInline
     @exclusivity(unchecked)
     var isUpdating = false
 
-    // generic path. When `T` is statically `Equatable`, the overload in the constrained extension
-    // below is picked instead: same behavior, but the default equality is an inline `==`
+    // generic path.
     @inlinable
     public var value: T {
         get { trackedRead() }
@@ -338,8 +361,7 @@ public final class SignalNode<T>: NodeWrapper {
     @usableFromInline
     let equals: ((T, T) -> Bool)?
 
-    // set by the `Equatable` init: `equals` is `==`, so the `Equatable` overload of `value`
-    // compares inline instead of calling through the closure
+    // less dynamic function call
     @usableFromInline
     let usesDefaultEquality: Bool
 
@@ -411,13 +433,12 @@ public final class ComputedNode<T>: NodeWrapper {
 
     @inlinable
     public convenience init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
-        // no captures: `self` comes in as the argument, so there's no cycle
+        // no `self` captures
         self.init(computation: computation, equals: equals) { wrapper in
             unsafeDowncast(wrapper, to: ComputedNode<T>.self).update()
         }
     }
 
-    // `update` is the recompute thunk, built where `T` is concrete so it's specialized
     @inlinable
     init(
         computation: @escaping () -> T,

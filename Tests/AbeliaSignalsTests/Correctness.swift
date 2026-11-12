@@ -11,6 +11,19 @@ import Testing
 @inline(never)
 func blackHole<T>(_ x: T) {}
 
+// deterministic, so a failing randomized test fails the same way every run
+struct SplitMix64: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
 // the reactivity runtime uses globals (current sink, current batch): no parallel tests
 @Suite(.serialized)
 struct Correctness {
@@ -301,6 +314,41 @@ struct Correctness {
         x.value += 1
         blackHole(e)
         #expect(runs == 0)
+    }
+
+    // dependency lists that grow, shrink, reorder and repeat on every write: the edge bookkeeping
+    // (reuse by position, unlink, back indices) must keep every computed reacting correctly
+    @Test("randomized dynamic deps: values match direct evaluation")
+    func randomizedDynamicDeps() {
+        var rng = SplitMix64(seed: 42)
+        let raw = (0..<12).map { _ in Int.random(in: 0..<100, using: &rng) }
+        let signals = raw.map { Signal($0) }
+        let pick = Signal(0)  // changes which signals each computed reads
+
+        // computed k reads a pick-dependent list of signals, with duplicates
+        func reads(_ k: Int, _ p: Int) -> [Int] {
+            (0..<((k + p) % 6 + 1)).map { (k * 7 + p * 3 + $0 * 5) % 12 }
+        }
+        let computeds = (0..<20).map { k in
+            Computed { reads(k, pick.value).reduce(0) { $0 &+ signals[$1].value } }
+        }
+
+        var model = raw
+        var p = 0
+        for step in 0..<300 {
+            if step % 3 == 0 {
+                p = Int.random(in: 0..<10, using: &rng)
+                pick.value = p
+            } else {
+                let i = Int.random(in: 0..<12, using: &rng)
+                model[i] = Int.random(in: 0..<100, using: &rng)
+                signals[i].value = model[i]
+            }
+            for (k, c) in computeds.enumerated() {
+                let expected = reads(k, p).reduce(0) { $0 &+ model[$1] }
+                #expect(c.value == expected, "step \(step), computed \(k)")
+            }
+        }
     }
 
     // MARK: v2 `update`
