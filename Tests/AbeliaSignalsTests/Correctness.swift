@@ -502,6 +502,91 @@ struct Correctness {
         #expect(runs == 0)
     }
 
+    @Test("effect: writing a signal it reads doesn't rerun it (no recursion by default)")
+    func selfWriteDoesNotRerun() {
+        let a = Signal(0)
+        var runs = 0
+        let e = Effect.immediate {
+            runs += 1
+            if a.value < 3 { a.value += 1 }
+        }
+        #expect(runs == 1)
+        #expect(a.value == 1)
+        a.value = 0  // a write from outside still reruns it
+        #expect(runs == 2)
+        #expect(a.value == 1)
+        blackHole(e)
+    }
+
+    @Test("effect: a signal created and written in the body doesn't loop")
+    func localSignalDoesNotLoop() {
+        var runs = 0
+        let e = Effect.immediate {
+            runs += 1
+            let a = Signal(1)
+            blackHole(a.value)
+            a.value += 1
+        }
+        #expect(runs == 1)
+        blackHole(e)
+    }
+
+    @Test("effect: no self-trigger through a computed either")
+    func noSelfTriggerThroughComputed() {
+        let a = Signal(0)
+        let doubled = Computed { a.value &* 2 }
+        var runs = 0
+        let e = Effect.immediate {
+            runs += 1
+            if doubled.value < 6 { a.value += 1 }
+        }
+        #expect(runs == 1)
+        blackHole(e)
+    }
+
+    @Test("effect: allowRecurse reruns it until stable")
+    func allowRecurseReruns() {
+        let a = Signal(0)
+        var runs = 0
+        let e = EffectNode(allowRecurse: true) {
+            runs += 1
+            if a.value < 3 { a.value += 1 }
+        }
+        #expect(a.value == 3)
+        #expect(runs == 4)
+        blackHole(e)
+    }
+
+    @Test("scope: a child dirtied during its owner's first run still runs and keeps reacting")
+    func childDirtiedDuringOwnerCreation() {
+        let s = Signal(0)
+        var childSaw: [Int] = []
+        let outer = Effect.immediate {
+            _ = Effect.immediate { childSaw.append(s.value) }
+            s.value = 1  // dirties the child while the outer body is still running
+        }
+        #expect(childSaw.last == 1)
+        s.value = 2
+        #expect(childSaw.last == 2)
+        blackHole(outer)
+    }
+
+    @Test("scope: what a child effect reads isn't tracked by its parent")
+    func childReadsNotTrackedByParent() {
+        let parentDep = Signal(0)
+        let childDep = Signal(0)
+        var parentRuns = 0
+        let outer = Effect.immediate {
+            parentRuns += 1
+            blackHole(parentDep.value)
+            _ = Effect.immediate { blackHole(childDep.value) }  // first run inside the parent body
+        }
+        parentRuns = 0
+        childDep.value += 1
+        #expect(parentRuns == 0)
+        blackHole(outer)
+    }
+
     @Test("scope: onCleanup in an effect runs before each rerun and on dispose")
     func effectCleanup() {
         let a = Signal(0)

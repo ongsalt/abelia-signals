@@ -31,6 +31,10 @@ struct Node {
     @usableFromInline
     var trackingIndex: Int = 0
 
+    // exempted from mark dirty  
+    @usableFromInline
+    var isRunning: Bool = false
+
     // Node address is NOT stable, but no handle are needed cuz we have back pointer to report this to wrapper
     @usableFromInline
     var owner: Unmanaged<NodeWrapper>
@@ -165,6 +169,8 @@ extension NodeRef {
     // returns: should mark sinks dirty
     @inlinable
     func markDirty(direct: Bool) -> Bool {
+        if pointee.isRunning { return false }
+
         switch pointee.state {
         case .dirty:
             return false
@@ -488,6 +494,8 @@ public final class EffectNode: NodeWrapper {
     @usableFromInline
     let effect: () -> Void
     @usableFromInline
+    let allowRecurse: Bool
+    @usableFromInline
     @exclusivity(unchecked)
     var immediate: Bool
 
@@ -506,15 +514,18 @@ public final class EffectNode: NodeWrapper {
     var isDisposed = false
 
     @inlinable
-    public init(immediate: Bool = true, effect: @escaping () -> Void) {
+    public init(immediate: Bool = true, allowRecurse: Bool = false, effect: @escaping () -> Void) {
         self.immediate = immediate
+        self.allowRecurse = allowRecurse
         self.effect = effect
         self.innerScope = EffectScopeNode(attached: false)
         super.init(isEffect: true)
         innerScope.ownerEffect = self
         currentScopeNode?.adopt(self)
         node.pointee.state = .dirty
-        runEffect(force: true)
+        // inside a batch, like every run: a write in the body only queues, it can't rerun this
+        // effect while the body is still running
+        batch { runEffect(force: true) }
     }
 
     @inlinable
@@ -576,12 +587,11 @@ public final class EffectNode: NodeWrapper {
             }
         }
 
-        defer {
-            node.pointee.state = .clean
-            isReallyDirty = false
-        }
-
         let shouldRun = force || isReallyDirty || node.pull()
+
+        // clean before run so write in effect body will mark this dirty again
+        node.pointee.state = .clean
+        isReallyDirty = false
         if !shouldRun { return }
 
         innerScope.reset()
@@ -589,6 +599,8 @@ public final class EffectNode: NodeWrapper {
         let prev = currentScopeNode
         currentScopeNode = innerScope
         defer { currentScopeNode = prev }
+        node.pointee.isRunning = !allowRecurse
+        defer { node.pointee.isRunning = false }
         node.withTracking(effect)
     }
 }
