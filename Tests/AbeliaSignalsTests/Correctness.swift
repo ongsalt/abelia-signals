@@ -356,6 +356,144 @@ struct Correctness {
     // MARK: v2 `update`
 
     #if V2
+    // MARK: v2 scopes
+
+    @Test("scope: keeps its effects alive without a handle, dispose stops them")
+    func scopeOwnsEffects() {
+        let a = Signal(0)
+        var runs = 0
+        let scope = EffectScopeNode()
+        scope.run {
+            _ = Effect.immediate { runs += 1; blackHole(a.value) }  // handle dropped
+        }
+        a.value += 1
+        #expect(runs == 2)  // initial run + rerun: the scope kept it alive
+        scope.dispose()
+        a.value += 1
+        #expect(runs == 2)
+    }
+
+    @Test("scope: without one, dropping the handle ends the effect")
+    func noScopeHandleOwns() {
+        let a = Signal(0)
+        var runs = 0
+        _ = Effect.immediate { runs += 1; blackHole(a.value) }
+        a.value += 1
+        #expect(runs == 1)  // only the initial run
+    }
+
+    @Test("scope: effect.dispose stops it and detaches it from its scope")
+    func effectDispose() {
+        let a = Signal(0)
+        var runs = 0
+        let scope = EffectScopeNode()
+        let e = scope.run { Effect.immediate { runs += 1; blackHole(a.value) } }
+        e.dispose()
+        a.value += 1
+        #expect(runs == 1)
+        scope.dispose()  // e is no longer in it: no double dispose
+        e.dispose()  // idempotent
+    }
+
+    @Test("scope: an effect created in an effect is disposed on the outer rerun")
+    func nestedEffectOwnedByOuterRun() {
+        let outer = Signal(0)
+        let inner = Signal(0)
+        var innerRuns = 0
+        let e = Effect.immediate {
+            blackHole(outer.value)
+            _ = Effect.immediate { innerRuns += 1; blackHole(inner.value) }
+        }
+        #expect(innerRuns == 1)
+        inner.value += 1
+        #expect(innerRuns == 2)  // the outer run's inner scope keeps it alive
+        outer.value += 1  // outer reruns: old inner disposed, a new one created
+        #expect(innerRuns == 3)
+        inner.value += 1
+        #expect(innerRuns == 4)  // only the new inner effect reacts
+        blackHole(e)
+    }
+
+    // inner reads `a` before outer does, so a write queues inner first; the outer must still
+    // rerun first, disposing the old inner before it gets a pointless rerun
+    @Test("scope: the outer effect reruns before its pending children")
+    func outerRerunsBeforePendingChildren() {
+        let a = Signal(0)
+        var innerRuns = 0
+        let outer = Effect.immediate {
+            _ = Effect.immediate { innerRuns += 1; blackHole(a.value) }
+            blackHole(a.value)  // after creating inner: inner is a's first sink
+        }
+        innerRuns = 0
+        a.value += 1
+        #expect(innerRuns == 1)  // only the new inner's first run
+        blackHole(outer)
+    }
+
+    // the outer is only `.maybe` (behind a computed that doesn't change): it won't rerun, so the
+    // pending child must still run, and must not be recreated
+    @Test("scope: a child still runs when its pending owner turns out unchanged")
+    func childRunsWhenOwnerUnchanged() {
+        let a = Signal(0)
+        let stable = Computed { a.value / 1000 }  // stays 0
+        var outerRuns = 0
+        var innerRuns = 0
+        let outer = Effect.immediate {
+            outerRuns += 1
+            _ = Effect.immediate { innerRuns += 1; blackHole(a.value) }
+            blackHole(stable.value)
+        }
+        outerRuns = 0
+        innerRuns = 0
+        a.value += 1
+        #expect(outerRuns == 0)
+        #expect(innerRuns == 1)
+        blackHole(outer)
+    }
+
+    @Test("scope: onCleanup in an effect runs before each rerun and on dispose")
+    func effectCleanup() {
+        let a = Signal(0)
+        var cleanups: [Int] = []
+        let e = Effect.immediate {
+            let v = a.value
+            onCleanup { cleanups.append(v) }
+        }
+        a.value = 1
+        a.value = 2
+        #expect(cleanups == [0, 1])
+        e.dispose()
+        #expect(cleanups == [0, 1, 2])
+    }
+
+    @Test("scope: dispose runs cleanups last to first and disposes child scopes")
+    func scopeCleanupOrder() {
+        var log: [String] = []
+        let root = EffectScopeNode()
+        root.run {
+            onCleanup { log.append("root 1") }
+            let child = EffectScopeNode()
+            child.run { onCleanup { log.append("child") } }
+            onCleanup { log.append("root 2") }
+        }
+        root.dispose()
+        #expect(log == ["child", "root 2", "root 1"])
+    }
+
+    @Test("scope: a cleanup that disposes a sibling during dispose is fine")
+    func cleanupDisposesSibling() {
+        let a = Signal(0)
+        var runs = 0
+        let scope = EffectScopeNode()
+        scope.run {
+            let sibling = Effect.immediate { runs += 1; blackHole(a.value) }
+            _ = Effect.immediate { onCleanup { sibling.dispose() } }
+        }
+        scope.dispose()
+        a.value += 1
+        #expect(runs == 1)
+    }
+
     @Test("batch: nested batches flush once, at the outermost end")
     func nestedBatchFlushesAtOuterEnd() {
         let a = Signal(0)

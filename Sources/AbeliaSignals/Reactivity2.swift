@@ -493,13 +493,44 @@ public final class EffectNode: NodeWrapper {
     @exclusivity(unchecked)
     var isReallyDirty: Bool = false
 
+    @usableFromInline
+    let innerScope: EffectScopeNode
+
+    @usableFromInline
+    unowned(unsafe) var scope: EffectScopeNode?
+    @usableFromInline
+    var indexInScope: Int = -1
+    @usableFromInline
+    var isDisposed = false
+
     @inlinable
     public init(immediate: Bool = true, effect: @escaping () -> Void) {
         self.immediate = immediate
         self.effect = effect
+        self.innerScope = EffectScopeNode(attached: false)
         super.init(isEffect: true)
+        innerScope.ownerEffect = self
+        currentScopeNode?.adopt(self)
         node.pointee.state = .dirty
         runEffect(force: true)
+    }
+
+    @inlinable
+    public func dispose() {
+        if isDisposed { return }
+        let owner = scope
+        disposeOwned()
+        owner?.release(self)
+    }
+
+    // the same, but called by the scope so it wont tell scope to release self again
+    @inlinable
+    func disposeOwned() {
+        if isDisposed { return }
+        isDisposed = true
+        scope = nil
+        node.unlinkSources()
+        innerScope.reset()
     }
 
     @inlinable
@@ -514,8 +545,32 @@ public final class EffectNode: NodeWrapper {
         currentImmediateBatch!.pointee.append(self)
     }
 
+    // .dirty -> yes. `.maybe` -> check
+    @inlinable
+    func willRerun() -> Bool {
+        if node.pointee.state == .maybe {
+            for i in node.pointee.sources.indices {
+                _ = node.pointee.sources[i].node.pull()
+                if node.pointee.state == .dirty { break }
+            }
+        }
+        return node.pointee.state == .dirty
+    }
+
     @inlinable
     func runEffect(force: Bool = false) {
+        if isDisposed { return }
+
+        // Owner first, without running it here (it may be on another scheduler)
+        // if parent dirty -> self gonna be disposed anywhere
+        if !force {
+            var owner = scope?.ownerEffect
+            while let o = owner {
+                if o.willRerun() { return }
+                owner = o.scope?.ownerEffect
+            }
+        }
+
         defer {
             node.pointee.state = .clean
             isReallyDirty = false
@@ -524,6 +579,11 @@ public final class EffectNode: NodeWrapper {
         let shouldRun = force || isReallyDirty || node.pull()
         if !shouldRun { return }
 
+        innerScope.reset()
+
+        let prev = currentScopeNode
+        currentScopeNode = innerScope
+        defer { currentScopeNode = prev }
         node.withTracking(effect)
     }
 }
