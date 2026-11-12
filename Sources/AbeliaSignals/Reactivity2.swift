@@ -10,9 +10,9 @@ class Runtime {
 
 @usableFromInline
 struct Node {
-    // for computed/effect
+    // state, isEffect and isRunning packed
     @usableFromInline
-    var state: State = .dirty
+    var flags: NodeFlags
 
     // behavior:
     //  - if self is .maybe, force deps recheck (effect)
@@ -31,10 +31,6 @@ struct Node {
     @usableFromInline
     var trackingIndex: Int = 0
 
-    // exempted from mark dirty  
-    @usableFromInline
-    var isRunning: Bool = false
-
     // Node address is NOT stable, but no handle are needed cuz we have back pointer to report this to wrapper
     @usableFromInline
     var owner: Unmanaged<NodeWrapper>
@@ -42,16 +38,68 @@ struct Node {
     @usableFromInline
     let update: (NodeWrapper) -> Bool
 
-    // `owner.becameDirty` is only called for effects
-    @usableFromInline
-    let isEffect: Bool
-
     @inlinable
     init(owner: Unmanaged<NodeWrapper>, isEffect: Bool, update: @escaping (NodeWrapper) -> Bool) {
         self.owner = owner
-        self.isEffect = isEffect
+        self.flags = isEffect ? [.dirty, .effect] : [.dirty]
         self.update = update
     }
+
+    // for computed/effect: clean = neither state bit set
+    @inlinable
+    var state: State {
+        get {
+            if flags.contains(.dirty) { return .dirty }
+            if flags.contains(.maybe) { return .maybe }
+            return .clean
+        }
+        set {
+            flags.subtract(.stateMask)
+            switch newValue {
+            case .dirty: flags.insert(.dirty)
+            case .maybe: flags.insert(.maybe)
+            case .clean: break
+            }
+        }
+    }
+
+    // `owner.becameDirty` is only called for effects. Fixed at init
+    @inlinable
+    var isEffect: Bool { flags.contains(.effect) }
+
+    // exempted from mark dirty
+    @inlinable
+    var isRunning: Bool {
+        get { flags.contains(.running) }
+        set {
+            if newValue { flags.insert(.running) } else { flags.remove(.running) }
+        }
+    }
+}
+
+@usableFromInline
+@frozen
+struct NodeFlags: OptionSet {
+    @usableFromInline
+    var rawValue: UInt8
+
+    @inlinable
+    init(rawValue: UInt8) {
+        self.rawValue = rawValue
+    }
+
+    // state: at most one of these, neither = clean
+    @inlinable
+    static var dirty: NodeFlags { NodeFlags(rawValue: 1 << 0) }
+    @inlinable
+    static var maybe: NodeFlags { NodeFlags(rawValue: 1 << 1) }
+    @inlinable
+    static var stateMask: NodeFlags { NodeFlags(rawValue: 0b11) }
+
+    @inlinable
+    static var effect: NodeFlags { NodeFlags(rawValue: 1 << 2) }
+    @inlinable
+    static var running: NodeFlags { NodeFlags(rawValue: 1 << 3) }
 }
 
 // sink (and user) own source, effect owner own effect
