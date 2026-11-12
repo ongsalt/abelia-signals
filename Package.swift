@@ -10,8 +10,11 @@ let package = Package(
         .library(name: "AbeliaSignals", targets: ["AbeliaSignals"]),
     ],
     targets: [
+        .target(name: "AbeliaSignalsTLS"),
+
         .target(
             name: "AbeliaSignals",
+            dependencies: ["AbeliaSignalsTLS"],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
                 .enableExperimentalFeature("Lifetimes"),
@@ -49,4 +52,5 @@ let package = Package(
             ],
         ),
     ],
+    cLanguageStandard: .c2x,
 )

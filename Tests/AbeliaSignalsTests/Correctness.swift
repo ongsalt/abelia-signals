@@ -5,6 +5,8 @@
 // can't pass as fast.
 
 import AbeliaSignals
+import Dispatch
+import Synchronization
 import Testing
 
 // keeps effects alive (and values used) until the end of a test
@@ -354,6 +356,70 @@ struct Correctness {
     // MARK: v2 `update`
 
     #if V2
+    @Test("batch: nested batches flush once, at the outermost end")
+    func nestedBatchFlushesAtOuterEnd() {
+        let a = Signal(0)
+        let b = Signal(0)
+        var runs = 0
+        var glitches = 0
+        let e = Effect.immediate {
+            runs += 1
+            if a.value != b.value { glitches += 1 }
+        }
+        runs = 0
+        batch {
+            a.value = 1
+            batch { b.value = 1 }  // an inner flush here would see a == 1, b == 1 too early
+            a.value = 2
+            b.value = 2
+        }
+        blackHole(e)
+        #expect(runs == 1)
+        #expect(glitches == 0)
+    }
+
+    @Test("batch: an effect writing a signal runs its dependents in the same flush")
+    func effectWritingSignalRunsDependents() {
+        let a = Signal(0)
+        let doubled = Signal(0)
+        var seen = -1
+        let writer = Effect.immediate { doubled.value = a.value &* 2 }
+        let reader = Effect.immediate { seen = doubled.value }
+        a.value = 21
+        blackHole((writer, reader))
+        #expect(seen == 42)
+    }
+
+    @Test("batch: effects chained through signals settle in one write")
+    func effectChainSettles() {
+        let s = (0..<5).map { _ in Signal(0) }
+        let effects = (0..<4).map { i in Effect.immediate { s[i + 1].value = s[i].value &+ 1 } }
+        s[0].value = 10
+        blackHole(effects)
+        #expect(s[4].value == 14)
+    }
+
+    // tracking state is thread-local: independent graphs on different threads don't interfere
+    @Test("threads: independent graphs track concurrently")
+    func threadLocalTracking() {
+        let failures = Mutex(0)
+        DispatchQueue.concurrentPerform(iterations: 8) { t in
+            let a = Signal(t)
+            let b = Computed { a.value &* 2 }
+            let c = Computed { b.value &+ a.value }
+            var seen = 0
+            let e = Effect.immediate { seen = c.value }
+            for i in 0..<2000 {
+                a.value = t &* 10_000 &+ i
+                if c.value != (t &* 10_000 &+ i) &* 3 || seen != c.value {
+                    failures.withLock { $0 += 1 }
+                }
+            }
+            blackHole(e)
+        }
+        #expect(failures.withLock { $0 } == 0)
+    }
+
     @Test("update: propagates even when the value is unchanged")
     func updateAlwaysPropagates() {
         let a = Signal(0)

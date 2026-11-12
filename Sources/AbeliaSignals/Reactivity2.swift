@@ -1,4 +1,10 @@
+@preconcurrency import AbeliaSignalsTLS
+
 class Runtime {
+    // global/ambient state needed: 
+    // - current sink: transient tls
+    // - current effect scope: transient tls
+    // - 
     // TODO: arena with topological sorting
 }
 
@@ -248,14 +254,6 @@ extension NodeRef {
         pointee.sources = []
     }
 }
-
-@usableFromInline
-@exclusivity(unchecked)
-nonisolated(unsafe) var currentSinkNode: NodeRef?
-
-@usableFromInline
-@exclusivity(unchecked)
-nonisolated(unsafe) var currentImmediateBatch: [EffectNode]?
 
 public class NodeWrapper {
     @usableFromInline
@@ -512,7 +510,8 @@ public final class EffectNode: NodeWrapper {
         if confident {
             isReallyDirty = true
         }
-        currentImmediateBatch!.append(self)
+        // in place through the pointer: no copy of the queue
+        currentImmediateBatch!.pointee.append(self)
     }
 
     @inlinable
@@ -531,14 +530,23 @@ public final class EffectNode: NodeWrapper {
 
 @inlinable
 public func batch<T>(body: () -> T) -> T {
-    let prev = currentImmediateBatch
-    currentImmediateBatch = []
-    let ret = body()
+    // nested: ignored
+    if currentImmediateBatch != nil { return body() }
 
-    for effect in currentImmediateBatch! {
-        effect.runEffect()
+    var queue: [EffectNode] = []
+    return withUnsafeMutablePointer(to: &queue) { queue in
+        currentImmediateBatch = queue
+        defer { currentImmediateBatch = nil }
+
+        let ret = body()
+
+        // allow effect to write signal without crashing
+        var i = 0
+        while i < queue.pointee.count {
+            let effect = queue.pointee[i]
+            i += 1
+            effect.runEffect()
+        }
+        return ret
     }
-
-    currentImmediateBatch = prev
-    return ret
 }
