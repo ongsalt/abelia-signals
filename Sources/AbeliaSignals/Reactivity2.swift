@@ -274,20 +274,25 @@ public final class SignalNode<T>: NodeWrapper {
     @exclusivity(unchecked)
     var isUpdating = false
 
+    // generic path. When `T` is statically `Equatable`, the overload in the constrained extension
+    // below is picked instead: same behavior, but the default equality is an inline `==`
     @inlinable
     public var value: T {
-        get {
-            checkNotUpdating()
-            // this should start an immediate effect batch
-            currentSinkNode?.trackRead(node)
-            return _value
-        }
+        get { trackedRead() }
         set {
             checkNotUpdating()
             if let equals, equals(_value, newValue) { return }
             _value = newValue
             notifySinks()
         }
+    }
+
+    @inlinable
+    func trackedRead() -> T {
+        checkNotUpdating()
+        // this should start an immediate effect batch
+        currentSinkNode?.trackRead(node)
+        return _value
     }
 
     @inlinable
@@ -333,10 +338,21 @@ public final class SignalNode<T>: NodeWrapper {
     @usableFromInline
     let equals: ((T, T) -> Bool)?
 
+    // set by the `Equatable` init: `equals` is `==`, so the `Equatable` overload of `value`
+    // compares inline instead of calling through the closure
+    @usableFromInline
+    let usesDefaultEquality: Bool
+
     @inlinable
-    public init(_ value: T, equals: ((T, T) -> Bool)?) {
+    public convenience init(_ value: T, equals: ((T, T) -> Bool)?) {
+        self.init(value: value, equals: equals, usesDefaultEquality: false)
+    }
+
+    @inlinable
+    init(value: T, equals: ((T, T) -> Bool)?, usesDefaultEquality: Bool) {
         _value = value
         self.equals = equals
+        self.usesDefaultEquality = usesDefaultEquality
         super.init()
         node.pointee.state = .clean
     }
@@ -352,7 +368,22 @@ func signalAccessConflict() -> Never {
 extension SignalNode where T: Equatable {
     @inlinable
     public convenience init(_ value: T) {
-        self.init(value, equals: ==)
+        self.init(value: value, equals: ==, usesDefaultEquality: true)
+    }
+
+    @inlinable
+    public var value: T {
+        get { trackedRead() }
+        set {
+            checkNotUpdating()
+            if usesDefaultEquality {
+                if _value == newValue { return }
+            } else if let equals, equals(_value, newValue) {
+                return
+            }
+            _value = newValue
+            notifySinks()
+        }
     }
 }
 
@@ -379,13 +410,23 @@ public final class ComputedNode<T>: NodeWrapper {
     }
 
     @inlinable
-    public init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
+    public convenience init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
+        // no captures: `self` comes in as the argument, so there's no cycle
+        self.init(computation: computation, equals: equals) { wrapper in
+            unsafeDowncast(wrapper, to: ComputedNode<T>.self).update()
+        }
+    }
+
+    // `update` is the recompute thunk, built where `T` is concrete so it's specialized
+    @inlinable
+    init(
+        computation: @escaping () -> T,
+        equals: ((T, T) -> Bool)?,
+        update: @escaping (NodeWrapper) -> Bool
+    ) {
         self.computation = computation
         self.equals = equals
-        // no captures: `self` comes in as the argument, so there's no cycle
-        super.init(update: { wrapper in
-            unsafeDowncast(wrapper, to: ComputedNode<T>.self).update()
-        })
+        super.init(update: update)
     }
 
     @inlinable
@@ -406,7 +447,19 @@ public final class ComputedNode<T>: NodeWrapper {
 extension ComputedNode where T: Equatable {
     @inlinable
     public convenience init(_ computation: @escaping () -> T) {
-        self.init(computation, equals: ==)
+        // the recompute thunk compares with an inline `==` instead of calling `equals`
+        self.init(computation: computation, equals: ==) { wrapper in
+            unsafeDowncast(wrapper, to: ComputedNode<T>.self).updateEquatable()
+        }
+    }
+
+    // `update` with the default equality inlined
+    @inlinable
+    func updateEquatable() -> Bool {
+        let newValue = node.withTracking(computation)
+        if let old = _value, old == newValue { return false }
+        _value = newValue
+        return true
     }
 }
 
