@@ -82,9 +82,9 @@ cd bench-js && npm run bench:bun                  # ... or Bun
 ```
 
 # Todo
-- Effect scope
-- effect disposal and `onDispose`
-- threadlocal c shim
+- put Effect scope in the graph??
+- `EffectScheduler`
+- nuke pure class based api.
 
 ## qol
 - propertyWrapper: `@Computed` property in a class that reference non signal field will make lifetime painful

@@ -1,18 +1,24 @@
 public final class EffectScopeNode {
     // where this scope sits in its parent, for O(1) removal on its own `dispose()`
     @usableFromInline
+    @exclusivity(unchecked)
     unowned(unsafe) var parent: EffectScopeNode?
     @usableFromInline
+    @exclusivity(unchecked)
     var indexInParent: Int = -1
 
     @usableFromInline
+    @exclusivity(unchecked)
     unowned(unsafe) var ownerEffect: EffectNode?
 
     @usableFromInline
+    @exclusivity(unchecked)
     var effects: [EffectNode] = []
     @usableFromInline
+    @exclusivity(unchecked)
     var scopes: [EffectScopeNode] = []
     @usableFromInline
+    @exclusivity(unchecked)
     var cleanups: [() -> Void] = []
 
     @inlinable

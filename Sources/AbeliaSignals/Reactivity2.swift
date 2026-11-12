@@ -568,10 +568,13 @@ public final class EffectNode: NodeWrapper {
     let innerScope: EffectScopeNode
 
     @usableFromInline
+    @exclusivity(unchecked)
     unowned(unsafe) var scope: EffectScopeNode?
     @usableFromInline
+    @exclusivity(unchecked)
     var indexInScope: Int = -1
     @usableFromInline
+    @exclusivity(unchecked)
     var isDisposed = false
 
     @inlinable
