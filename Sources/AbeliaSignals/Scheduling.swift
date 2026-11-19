@@ -25,6 +25,7 @@ public final class EffectScheduler {
     public func flush() {
         hasPendingFlush = false
         flushPending(in: &pending)
+        pending = []
     }
 }
 
