@@ -28,16 +28,16 @@ public final class EffectScope {
 
     @inlinable
     init(attached: Bool) {
-        if attached, let parent = currentScopeNode {
+        if attached, let parent = EffectScope.current {
             parent.adopt(self)
         }
     }
 
     @inlinable
     public func run<R, E>(_ body: () throws(E) -> R) throws(E) -> R {
-        let prev = currentScopeNode
-        currentScopeNode = self
-        defer { currentScopeNode = prev }
+        let prev = EffectScope.current
+        EffectScope.current = self
+        defer { EffectScope.current = prev }
         return try body()
     }
 
@@ -130,5 +130,5 @@ public final class EffectScope {
 
 @inlinable
 public func onCleanup(_ cleanup: @escaping () -> Void) {
-    currentScopeNode?.cleanups.append(cleanup)
+    EffectScope.current?.cleanups.append(cleanup)
 }

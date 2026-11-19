@@ -155,9 +155,9 @@ extension NodeRef {
 
     @inlinable
     func withTracking<R>(_ body: () -> R) -> R {
-        let prev = currentSinkNode
-        currentSinkNode = self
-        defer { currentSinkNode = prev }
+        let prev = Node.current
+        Node.current = self
+        defer { Node.current = prev }
 
         pointee.trackingIndex = 0
         let result = body()
@@ -391,7 +391,7 @@ public final class Signal<T>: NodeWrapper {
     func trackedRead() -> T {
         checkNotUpdating()
         // this should start an immediate effect batch
-        currentSinkNode?.trackRead(node)
+        Node.current?.trackRead(node)
         return _value
     }
 
@@ -426,7 +426,7 @@ public final class Signal<T>: NodeWrapper {
         // nobody to notify: skip the batch and the walk
         if node.pointee.sinks.isEmpty { return }
 
-        if currentImmediateBatch == nil {
+        if ImmediateBatch.current == nil {
             batch {
                 node.propagate()
             }
@@ -498,7 +498,7 @@ public final class Computed<T>: NodeWrapper {
     @inlinable
     public var value: T {
         recomputeIfNeeded()
-        currentSinkNode?.trackRead(node)
+        Node.current?.trackRead(node)
         return _value!
     }
 
@@ -590,13 +590,13 @@ public final class Effect: NodeWrapper {
     public init(
         flush: Flush? = nil, allowRecurse: Bool = false, effect: @escaping () -> Void
     ) {
-        self.flush = flush ?? currentFlush ?? .immediate
+        self.flush = flush ?? Flush.current ?? .immediate
         self.allowRecurse = allowRecurse
         self.effect = effect
         self.innerScope = EffectScope(attached: false)
         super.init(isEffect: true)
         innerScope.ownerEffect = self
-        currentScopeNode?.adopt(self)
+        EffectScope.current?.adopt(self)
         node.pointee.state = .dirty
         // inside a batch, like every run: a write in the body only queues, it can't rerun this
         // effect while the body is still running
@@ -619,7 +619,7 @@ public final class Effect: NodeWrapper {
         scope = nil
         // disposed mid-run: the rest of the body reads untracked (withTracking restores the
         // outer sink when the run ends)
-        if currentSinkNode == node { currentSinkNode = nil }
+        if Node.current == node { Node.current = nil }
         node.unlinkSources()
         innerScope.reset()
     }
@@ -669,9 +669,9 @@ public final class Effect: NodeWrapper {
 
         innerScope.reset()
 
-        let prev = currentScopeNode
-        currentScopeNode = innerScope
-        defer { currentScopeNode = prev }
+        let prev = EffectScope.current
+        EffectScope.current = innerScope
+        defer { EffectScope.current = prev }
         node.pointee.isRunning = !allowRecurse
         defer { node.pointee.isRunning = false }
         node.withTracking(effect)
@@ -681,12 +681,12 @@ public final class Effect: NodeWrapper {
 @inlinable
 public func batch<T>(body: () -> T) -> T {
     // nested: ignored
-    if currentImmediateBatch != nil { return body() }
+    if ImmediateBatch.current != nil { return body() }
 
     var queue: [Effect] = []
     return withUnsafeMutablePointer(to: &queue) { queue in
-        currentImmediateBatch = queue
-        defer { currentImmediateBatch = nil }
+        ImmediateBatch.current = queue
+        defer { ImmediateBatch.current = nil }
 
         let ret = body()
 
