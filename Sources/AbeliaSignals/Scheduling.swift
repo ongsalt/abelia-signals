@@ -23,9 +23,16 @@ public final class EffectScheduler {
     }
 
     public func flush() {
+        while !pending.isEmpty {
+            var queue: [Effect] = []
+            swap(&queue, &pending)
+            for i in queue.indices {
+                // the queue holding the last reference means nobody owns the effect any more
+                if isKnownUniquelyReferenced(&queue[i]) { continue }
+                queue[i].runEffect()
+            }
+        }
         hasPendingFlush = false
-        flushPending(in: &pending)
-        pending = []
     }
 }
 

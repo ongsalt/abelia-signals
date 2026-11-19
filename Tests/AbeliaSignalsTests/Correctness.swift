@@ -620,6 +620,35 @@ struct Correctness {
         blackHole(e)
     }
 
+    @Test("scheduler: an effect writing a signal runs its dependents in the same flush")
+    func schedulerEffectWritesSignal() {
+        let scheduler = EffectScheduler()
+        let a = Signal(0)
+        let doubled = Signal(0)
+        var seen = -1
+        let writer = Effect(flush: .scheduler(scheduler)) { doubled.value = a.value &* 2 }
+        let reader = Effect(flush: .scheduler(scheduler)) { seen = doubled.value }
+        a.value = 21
+        scheduler.flush()
+        #expect(seen == 42)
+        blackHole((writer, reader))
+    }
+
+    @Test("scheduler: writes during a flush don't request another flush")
+    func schedulerNoExtraFlushRequest() {
+        var requests = 0
+        let scheduler = EffectScheduler { _ in requests += 1 }
+        let a = Signal(0)
+        let b = Signal(0)
+        let writer = Effect(flush: .scheduler(scheduler)) { b.value = a.value }
+        let reader = Effect(flush: .scheduler(scheduler)) { blackHole(b.value) }
+        requests = 0
+        a.value = 1
+        scheduler.flush()
+        #expect(requests == 1)
+        blackHole((writer, reader))
+    }
+
     @Test("batch: nested batches flush once, at the outermost end")
     func nestedBatchFlushesAtOuterEnd() {
         let a = Signal(0)

@@ -689,24 +689,20 @@ public func batch<T>(body: () -> T) -> T {
         defer { currentImmediateBatch = nil }
 
         let ret = body()
-        flushPending(in: &queue.pointee)
+
+        // by index: effects may append to the queue while it drains
+        var i = 0
+        while i < queue.pointee.count {
+            // only the queue holds it: nobody owns it any more
+            if isKnownUniquelyReferenced(&queue.pointee[i]) {
+                i += 1
+                continue
+            }
+            let effect = queue.pointee[i]
+            i += 1
+            effect.runEffect()
+        }
         return ret
     }
 }
 
-@inlinable
-// allow effect to write signal without crashing
-func flushPending(in queue: inout [Effect]) {
-    var i = 0
-    while i < queue.count {
-        // the queue holding the last reference means nobody owns the effect any more
-        // (no handle, no scope; the graph never retains effects): skip it, it dies with the queue
-        if isKnownUniquelyReferenced(&queue[i]) {
-            i += 1
-            continue
-        }
-        let effect = queue[i]
-        i += 1
-        effect.runEffect()
-    }
-}
