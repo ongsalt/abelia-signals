@@ -649,6 +649,17 @@ struct Correctness {
         blackHole((writer, reader))
     }
 
+    @Test("scheduler: a synchronous flush from onFlushNeeded traps")
+    func synchronousFlushTraps() async {
+        await #expect(processExitsWith: .failure) {
+            let scheduler = EffectScheduler { flush in flush() }
+            let a = Signal(0)
+            let e = Effect(flush: .scheduler(scheduler)) { _ = a.value }
+            a.value = 1
+            _ = e
+        }
+    }
+
     @Test("batch: nested batches flush once, at the outermost end")
     func nestedBatchFlushesAtOuterEnd() {
         let a = Signal(0)

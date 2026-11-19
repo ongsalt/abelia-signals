@@ -5,9 +5,12 @@ import Synchronization
 public final class EffectScheduler {
     public var onFlushNeeded: ((@escaping () -> Void) -> Void)?
     var hasPendingFlush: Bool = false
+    // guard synchronous misuse
+    var isRequestingFlush: Bool = false
     var pending: [Effect] = []
 
-    // the callback passed in is `flush`. Schedule it as you see fit
+    /// `onFlushNeeded` receives `flush`: schedule it to run later (a task, the next frame, ...).
+    /// Never call it synchronously
     public init(onFlushNeeded: ((@escaping () -> Void) -> Void)? = nil) {
         self.onFlushNeeded = onFlushNeeded
     }
@@ -18,11 +21,17 @@ public final class EffectScheduler {
 
         if !hasPendingFlush {
             hasPendingFlush = true
+            isRequestingFlush = true
+            defer { isRequestingFlush = false }
             onFlushNeeded?(flush)
         }
     }
 
     public func flush() {
+        precondition(
+            !isRequestingFlush,
+            "EffectScheduler: flush() called synchronously from onFlushNeeded; schedule it for later (see init)"
+        )
         while !pending.isEmpty {
             var queue: [Effect] = []
             swap(&queue, &pending)
