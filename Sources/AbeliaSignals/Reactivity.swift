@@ -568,6 +568,11 @@ public final class Effect: NodeWrapper {
     let allowRecurse: Bool
     @usableFromInline
     let flush: Flush
+    // `EffectScheduler.current` when this effect was created: current again during each run, so
+    // effects created by the body inherit it on reruns too (a rerun from a flush is outside any
+    // `withEffectScheduler`)
+    @usableFromInline
+    let capturedScheduler: EffectScheduler?
 
     @usableFromInline
     @exclusivity(unchecked)
@@ -590,7 +595,9 @@ public final class Effect: NodeWrapper {
     public init(
         flush: Flush? = nil, allowRecurse: Bool = false, effect: @escaping () -> Void
     ) {
-        self.flush = flush ?? Flush.current ?? .immediate
+        let capturedScheduler = EffectScheduler.current
+        self.capturedScheduler = capturedScheduler
+        self.flush = flush ?? capturedScheduler.map { .scheduler($0) } ?? .immediate
         self.allowRecurse = allowRecurse
         self.effect = effect
         self.innerScope = EffectScope(attached: false)
@@ -672,6 +679,9 @@ public final class Effect: NodeWrapper {
         let prev = EffectScope.current
         EffectScope.current = innerScope
         defer { EffectScope.current = prev }
+        let prevScheduler = EffectScheduler.current
+        EffectScheduler.current = capturedScheduler
+        defer { EffectScheduler.current = prevScheduler }
         node.pointee.isRunning = !allowRecurse
         defer { node.pointee.isRunning = false }
         node.withTracking(effect)

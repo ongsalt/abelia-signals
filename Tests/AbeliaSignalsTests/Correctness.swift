@@ -660,6 +660,27 @@ struct Correctness {
         }
     }
 
+    @Test("scheduler: effects created on a rerun inherit the scheduler captured at creation")
+    func rerunUsesCapturedScheduler() {
+        let scheduler = EffectScheduler()
+        let a = Signal(0)
+        let b = Signal(0)
+        var childRuns = 0
+        let parent = withEffectScheduler(scheduler) {
+            Effect(flush: .immediate) {
+                blackHole(a.value)
+                _ = Effect { childRuns += 1; blackHole(b.value) }
+            }
+        }
+        a.value = 1  // parent reruns now, outside withEffectScheduler; creates a new child
+        childRuns = 0
+        b.value = 1
+        #expect(childRuns == 0)  // the new child is on the scheduler too
+        scheduler.flush()
+        #expect(childRuns == 1)
+        blackHole(parent)
+    }
+
     @Test("batch: nested batches flush once, at the outermost end")
     func nestedBatchFlushesAtOuterEnd() {
         let a = Signal(0)
