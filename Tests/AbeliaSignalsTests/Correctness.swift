@@ -606,6 +606,20 @@ struct Correctness {
         #expect(runs == 1)
     }
 
+    @Test("scheduler: an effect created in withEffectScheduler waits for its flush")
+    func inheritsScheduler() {
+        let scheduler = EffectScheduler()
+        let a = Signal(0)
+        var runs = 0
+        let e = withEffectScheduler(scheduler) { Effect { runs += 1; blackHole(a.value) } }
+        runs = 0
+        a.value = 1
+        #expect(runs == 0)
+        scheduler.flush()
+        #expect(runs == 1)
+        blackHole(e)
+    }
+
     @Test("batch: nested batches flush once, at the outermost end")
     func nestedBatchFlushesAtOuterEnd() {
         let a = Signal(0)

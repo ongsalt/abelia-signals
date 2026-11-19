@@ -590,8 +590,7 @@ public final class Effect: NodeWrapper {
     public init(
         flush: Flush? = nil, allowRecurse: Bool = false, effect: @escaping () -> Void
     ) {
-        // try inherit first
-        self.flush = flush ?? .immediate
+        self.flush = flush ?? currentFlush ?? .immediate
         self.allowRecurse = allowRecurse
         self.effect = effect
         self.innerScope = EffectScope(attached: false)

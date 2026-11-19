@@ -116,9 +116,14 @@ func runOnActor<A: Actor>(_ actor: isolated A, operation: () -> Void) {
     operation()
 }
 
-// must be synchronously used
+// must be synchronously used, TODO: make this normal tls
 @TaskLocal
 var currentEffectScheduler: TrustMeBro<EffectScheduler?> = TrustMeBro(value: nil)
+
+@usableFromInline
+var currentFlush: Flush? {
+    currentEffectScheduler.value.map { .scheduler($0) }
+}
 
 // Never start a non isolated task from this
 public func withEffectScheduler<T>(_ scheduler: EffectScheduler, body: () -> T) -> T {
