@@ -1,12 +1,12 @@
 import AbeliaSignals
 
-let a = SignalNode(1)
+let a = Signal(1)
 
-let c = ComputedNode {
+let c = Computed {
     a.value + 1
 }
 
-let e2 = EffectNode {
+let e2 = Effect {
     print("[immediate] c = \(c.value)")
 }
 

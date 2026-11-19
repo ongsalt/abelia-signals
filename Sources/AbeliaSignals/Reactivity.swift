@@ -1,9 +1,16 @@
 @preconcurrency import AbeliaSignalsTLS
 
 class Runtime {
-    // global/ambient state needed: 
+    // global/ambient state needed:
     // - current sink: transient tls
     // - current effect scope: transient tls
+}
+
+@usableFromInline
+enum State {
+    case dirty
+    case maybe
+    case clean
 }
 
 @usableFromInline
@@ -330,9 +337,12 @@ public class NodeWrapper {
     init(isEffect: Bool = false, update: @escaping (NodeWrapper) -> Bool = { _ in true }) {
         storage = Node(isEffect: isEffect, update: update)
         // the layout assumptions `node` and `NodeRef.owner` rely on
-        assert(withUnsafeMutablePointer(to: &storage) { $0 } == node, "storage isn't the first stored property")
         assert(
-            UnsafeRawPointer(node) - nodeHeaderSize == UnsafeRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            withUnsafeMutablePointer(to: &storage) { $0 } == node,
+            "storage isn't the first stored property")
+        assert(
+            UnsafeRawPointer(node) - nodeHeaderSize
+                == UnsafeRawPointer(Unmanaged.passUnretained(self).toOpaque()),
             "object header isn't nodeHeaderSize bytes"
         )
 
@@ -355,7 +365,7 @@ public class NodeWrapper {
     }
 }
 
-public final class SignalNode<T>: NodeWrapper {
+public final class Signal<T>: NodeWrapper {
     @usableFromInline
     @exclusivity(unchecked)
     var _value: T
@@ -454,7 +464,7 @@ func signalAccessConflict() -> Never {
     fatalError("signal accessed while its `update` is still running")
 }
 
-extension SignalNode where T: Equatable {
+extension Signal where T: Equatable {
     @inlinable
     public convenience init(_ value: T) {
         self.init(value: value, equals: ==, usesDefaultEquality: true)
@@ -476,7 +486,7 @@ extension SignalNode where T: Equatable {
     }
 }
 
-public final class ComputedNode<T>: NodeWrapper {
+public final class Computed<T>: NodeWrapper {
     @usableFromInline
     @exclusivity(unchecked)
     var _value: T?
@@ -502,7 +512,7 @@ public final class ComputedNode<T>: NodeWrapper {
     public convenience init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
         // no `self` captures
         self.init(computation: computation, equals: equals) { wrapper in
-            unsafeDowncast(wrapper, to: ComputedNode<T>.self).update()
+            unsafeDowncast(wrapper, to: Computed<T>.self).update()
         }
     }
 
@@ -532,12 +542,12 @@ public final class ComputedNode<T>: NodeWrapper {
     }
 }
 
-extension ComputedNode where T: Equatable {
+extension Computed where T: Equatable {
     @inlinable
     public convenience init(_ computation: @escaping () -> T) {
         // the recompute thunk compares with an inline `==` instead of calling `equals`
         self.init(computation: computation, equals: ==) { wrapper in
-            unsafeDowncast(wrapper, to: ComputedNode<T>.self).updateEquatable()
+            unsafeDowncast(wrapper, to: Computed<T>.self).updateEquatable()
         }
     }
 
@@ -551,25 +561,24 @@ extension ComputedNode where T: Equatable {
     }
 }
 
-public final class EffectNode: NodeWrapper {
+public final class Effect: NodeWrapper {
     @usableFromInline
     let effect: () -> Void
     @usableFromInline
     let allowRecurse: Bool
     @usableFromInline
-    @exclusivity(unchecked)
-    var immediate: Bool
+    let flush: Flush
 
     @usableFromInline
     @exclusivity(unchecked)
     var isReallyDirty: Bool = false
 
     @usableFromInline
-    let innerScope: EffectScopeNode
+    let innerScope: EffectScope
 
     @usableFromInline
     @exclusivity(unchecked)
-    unowned(unsafe) var scope: EffectScopeNode?
+    unowned(unsafe) var scope: EffectScope?
     @usableFromInline
     @exclusivity(unchecked)
     var indexInScope: Int = -1
@@ -578,11 +587,14 @@ public final class EffectNode: NodeWrapper {
     var isDisposed = false
 
     @inlinable
-    public init(immediate: Bool = true, allowRecurse: Bool = false, effect: @escaping () -> Void) {
-        self.immediate = immediate
+    public init(
+        flush: Flush? = nil, allowRecurse: Bool = false, effect: @escaping () -> Void
+    ) {
+        // try inherit first
+        self.flush = flush ?? .immediate
         self.allowRecurse = allowRecurse
         self.effect = effect
-        self.innerScope = EffectScopeNode(attached: false)
+        self.innerScope = EffectScope(attached: false)
         super.init(isEffect: true)
         innerScope.ownerEffect = self
         currentScopeNode?.adopt(self)
@@ -615,14 +627,12 @@ public final class EffectNode: NodeWrapper {
 
     @inlinable
     override func becameDirty(confident: Bool) {
-        // schedule the update
-        if !immediate { fatalError("unimplemented") }
-
         if confident {
             isReallyDirty = true
         }
-        // in place through the pointer: no copy of the queue
-        currentImmediateBatch!.pointee.append(self)
+
+        // schedule the update
+        flush.schedule(self)
     }
 
     // .dirty -> yes. `.maybe` -> check
@@ -674,26 +684,30 @@ public func batch<T>(body: () -> T) -> T {
     // nested: ignored
     if currentImmediateBatch != nil { return body() }
 
-    var queue: [EffectNode] = []
+    var queue: [Effect] = []
     return withUnsafeMutablePointer(to: &queue) { queue in
         currentImmediateBatch = queue
         defer { currentImmediateBatch = nil }
 
         let ret = body()
-
-        // allow effect to write signal without crashing
-        var i = 0
-        while i < queue.pointee.count {
-            // the queue holding the last reference means nobody owns the effect any more
-            // (no handle, no scope; the graph never retains effects): skip it, it dies with the queue
-            if isKnownUniquelyReferenced(&queue.pointee[i]) {
-                i += 1
-                continue
-            }
-            let effect = queue.pointee[i]
-            i += 1
-            effect.runEffect()
-        }
+        flushPending(in: &queue.pointee)
         return ret
+    }
+}
+
+@inlinable
+// allow effect to write signal without crashing
+func flushPending(in queue: inout [Effect]) {
+    var i = 0
+    while i < queue.count {
+        // the queue holding the last reference means nobody owns the effect any more
+        // (no handle, no scope; the graph never retains effects): skip it, it dies with the queue
+        if isKnownUniquelyReferenced(&queue[i]) {
+            i += 1
+            continue
+        }
+        let effect = queue[i]
+        i += 1
+        effect.runEffect()
     }
 }

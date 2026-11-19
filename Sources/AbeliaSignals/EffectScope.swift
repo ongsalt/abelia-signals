@@ -1,22 +1,22 @@
-public final class EffectScopeNode {
+public final class EffectScope {
     // where this scope sits in its parent, for O(1) removal on its own `dispose()`
     @usableFromInline
     @exclusivity(unchecked)
-    unowned(unsafe) var parent: EffectScopeNode?
+    unowned(unsafe) var parent: EffectScope?
     @usableFromInline
     @exclusivity(unchecked)
     var indexInParent: Int = -1
 
     @usableFromInline
     @exclusivity(unchecked)
-    unowned(unsafe) var ownerEffect: EffectNode?
+    unowned(unsafe) var ownerEffect: Effect?
 
     @usableFromInline
     @exclusivity(unchecked)
-    var effects: [EffectNode] = []
+    var effects: [Effect] = []
     @usableFromInline
     @exclusivity(unchecked)
-    var scopes: [EffectScopeNode] = []
+    var scopes: [EffectScope] = []
     @usableFromInline
     @exclusivity(unchecked)
     var cleanups: [() -> Void] = []
@@ -76,14 +76,14 @@ public final class EffectScopeNode {
     }
 
     @inlinable
-    func adopt(_ scope: EffectScopeNode) {
+    func adopt(_ scope: EffectScope) {
         scope.parent = self
         scope.indexInParent = scopes.count
         scopes.append(scope)
     }
 
     @inlinable
-    func adopt(_ effect: EffectNode) {
+    func adopt(_ effect: Effect) {
         effect.scope = self
         effect.indexInScope = effects.count
         effects.append(effect)
@@ -92,7 +92,7 @@ public final class EffectScopeNode {
     // Both releases tolerate a child that's no longer in the list: during `reset()` the lists are
     // already detached, and a cleanup may dispose a sibling that hasn't been reached yet.
     @inlinable
-    func release(_ scope: EffectScopeNode) {
+    func release(_ scope: EffectScope) {
         let i = scope.indexInParent
         guard i >= 0, i < scopes.count, scopes[i] === scope else {
             scope.parent = nil
@@ -108,7 +108,7 @@ public final class EffectScopeNode {
     }
 
     @inlinable
-    func release(_ effect: EffectNode) {
+    func release(_ effect: Effect) {
         let i = effect.indexInScope
         guard i >= 0, i < effects.count, effects[i] === effect else {
             effect.scope = nil

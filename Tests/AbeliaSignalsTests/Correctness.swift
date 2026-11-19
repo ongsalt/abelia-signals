@@ -362,7 +362,7 @@ struct Correctness {
     func scopeOwnsEffects() {
         let a = Signal(0)
         var runs = 0
-        let scope = EffectScopeNode()
+        let scope = EffectScope()
         scope.run {
             _ = Effect.immediate { runs += 1; blackHole(a.value) }  // handle dropped
         }
@@ -386,7 +386,7 @@ struct Correctness {
     func effectDispose() {
         let a = Signal(0)
         var runs = 0
-        let scope = EffectScopeNode()
+        let scope = EffectScope()
         let e = scope.run { Effect.immediate { runs += 1; blackHole(a.value) } }
         e.dispose()
         a.value += 1
@@ -455,7 +455,7 @@ struct Correctness {
     func droppedWhileQueued() {
         let a = Signal(0)
         var runs = 0
-        var e: EffectNode? = Effect.immediate { runs += 1; blackHole(a.value) }
+        var e: Effect? = Effect.immediate { runs += 1; blackHole(a.value) }
         runs = 0
         batch {
             a.value += 1  // queues e
@@ -487,7 +487,7 @@ struct Correctness {
         let a = Signal(0)
         let b = Signal(0)
         var runs = 0
-        var me: EffectNode?
+        var me: Effect?
         let e = Effect.immediate {
             runs += 1
             blackHole(a.value)
@@ -548,7 +548,7 @@ struct Correctness {
     func allowRecurseReruns() {
         let a = Signal(0)
         var runs = 0
-        let e = EffectNode(allowRecurse: true) {
+        let e = Effect(allowRecurse: true) {
             runs += 1
             if a.value < 3 { a.value += 1 }
         }
@@ -605,10 +605,10 @@ struct Correctness {
     @Test("scope: dispose runs cleanups last to first and disposes child scopes")
     func scopeCleanupOrder() {
         var log: [String] = []
-        let root = EffectScopeNode()
+        let root = EffectScope()
         root.run {
             onCleanup { log.append("root 1") }
-            let child = EffectScopeNode()
+            let child = EffectScope()
             child.run { onCleanup { log.append("child") } }
             onCleanup { log.append("root 2") }
         }
@@ -620,7 +620,7 @@ struct Correctness {
     func cleanupDisposesSibling() {
         let a = Signal(0)
         var runs = 0
-        let scope = EffectScopeNode()
+        let scope = EffectScope()
         scope.run {
             let sibling = Effect.immediate { runs += 1; blackHole(a.value) }
             _ = Effect.immediate { onCleanup { sibling.dispose() } }

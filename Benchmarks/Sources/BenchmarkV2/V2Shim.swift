@@ -4,14 +4,14 @@ import AbeliaSignals
 
 typealias Signal = SignalNode
 typealias Computed = ComputedNode
-typealias Effect = EffectNode
+typealias Effect = Effect
 
 extension SignalNode {
     var peek: T { peak }
 }
 
-extension EffectNode {
-    static func immediate(effect: @escaping () -> Void) -> EffectNode {
-        EffectNode(immediate: true, effect: effect)
+extension Effect {
+    static func immediate(effect: @escaping () -> Void) -> Effect {
+        Effect(immediate: true, effect: effect)
     }
 }

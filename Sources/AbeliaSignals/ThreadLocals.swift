@@ -7,14 +7,14 @@ var currentSinkNode: NodeRef? {
 }
 
 @inlinable
-var currentImmediateBatch: UnsafeMutablePointer<[EffectNode]>? {
-    get { abelia_tls_immediate_batch?.assumingMemoryBound(to: [EffectNode].self) }
+var currentImmediateBatch: UnsafeMutablePointer<[Effect]>? {
+    get { abelia_tls_immediate_batch?.assumingMemoryBound(to: [Effect].self) }
     set { abelia_tls_immediate_batch = newValue.map { UnsafeMutableRawPointer($0) } }
 }
 
 @inlinable
-var currentScopeNode: EffectScopeNode? {
-    get { abelia_tls_current_scope.map { Unmanaged<EffectScopeNode>.fromOpaque($0).takeUnretainedValue() } }
+var currentScopeNode: EffectScope? {
+    get { abelia_tls_current_scope.map { Unmanaged<EffectScope>.fromOpaque($0).takeUnretainedValue() } }
     set { abelia_tls_current_scope = newValue.map { Unmanaged.passUnretained($0).toOpaque() } }
 }
 
