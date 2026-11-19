@@ -13,5 +13,6 @@
 extern _Thread_local void *_Nullable abelia_tls_current_sink ABELIA_TLS_MODEL;
 extern _Thread_local void *_Nullable abelia_tls_immediate_batch ABELIA_TLS_MODEL;
 extern _Thread_local void *_Nullable abelia_tls_current_scope ABELIA_TLS_MODEL;
+extern _Thread_local void *_Nullable abelia_tls_current_scheduler ABELIA_TLS_MODEL;
 
 #endif

@@ -132,26 +132,17 @@ func runOnActor<A: Actor>(_ actor: isolated A, operation: () -> Void) {
     operation()
 }
 
-// must be synchronously used, TODO: make this normal tls
-extension EffectScheduler {
-    @TaskLocal
-    static var current: TrustMeBro<EffectScheduler?> = TrustMeBro(value: nil)
-}
-
 extension Flush {
     @usableFromInline
     static var current: Flush? {
-        EffectScheduler.current.value.map { .scheduler($0) }
+        EffectScheduler.current.map { .scheduler($0) }
     }
 }
 
-// Never start a non isolated task from this
+/// Effects created synchronously inside `body` (on this thread) use `scheduler`.
 public func withEffectScheduler<T>(_ scheduler: EffectScheduler, body: () -> T) -> T {
-    EffectScheduler.$current.withValue(TrustMeBro(value: scheduler)) {
-        body()
-    }
-}
-
-struct TrustMeBro<T>: @unchecked Sendable {
-    let value: T
+    let prev = EffectScheduler.current
+    EffectScheduler.current = scheduler
+    defer { EffectScheduler.current = prev }
+    return body()
 }

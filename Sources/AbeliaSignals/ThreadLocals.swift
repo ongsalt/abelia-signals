@@ -25,6 +25,14 @@ extension EffectScope {
     }
 }
 
+extension EffectScheduler {
+    @inlinable
+    static var current: EffectScheduler? {
+        get { abelia_tls_current_scheduler.map { Unmanaged<EffectScheduler>.fromOpaque($0).takeUnretainedValue() } }
+        set { abelia_tls_current_scheduler = newValue.map { Unmanaged.passUnretained($0).toOpaque() } }
+    }
+}
+
 @inlinable
 public func untracked<R, E>(_ body: () throws(E) -> R) throws(E) -> R {
     let prev = Node.current
