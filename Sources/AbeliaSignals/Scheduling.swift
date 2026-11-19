@@ -47,7 +47,7 @@ public final class EffectScheduler {
 
 public enum Flush {
     // pretty much fallback now
-    case isolated(any Actor)
+    // case isolated(any Actor)
     case scheduler(EffectScheduler)
     case immediate
 }
@@ -59,8 +59,8 @@ extension Flush {
         case .immediate:
             // in place through the pointer: no copy of the queue
             currentImmediateBatch!.pointee.append(effect)
-        case .isolated(let actor):
-            fatalError("unimplemented")
+        // case .isolated(let actor):
+        //     fatalError("unimplemented")
             // scheduleFlush(effect, on: actor)
             break
         case .scheduler(let scheduler):
