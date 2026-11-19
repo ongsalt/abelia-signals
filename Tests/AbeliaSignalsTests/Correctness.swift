@@ -1,6 +1,3 @@
-// Shared by AbeliaSignalsTests (v1, `-D V1`) and AbeliaSignalsV2Tests (v2, `-D V2`, symlinked,
-// with V2Shim mapping the v1 names onto the node API).
-//
 // "Does it do the minimal amount of work?" counters, plus value checks so a disconnected graph
 // can't pass as fast.
 
@@ -54,13 +51,7 @@ struct Correctness {
         runs = 0
         a.value += 1
         blackHole(e)
-        #if V1
-        withKnownIssue("v1: `Effect.immediate` runs during propagation (readme, Bugs)") {
-            #expect(runs == 1)
-        }
-        #else
         #expect(runs == 1)
-        #endif
     }
 
     @Test("diamond: effect never sees glitch")
@@ -72,13 +63,7 @@ struct Correctness {
         let e = Effect.immediate { if b.value != c.value { glitches += 1 } }
         for _ in 0..<10 { a.value += 1 }
         blackHole(e)
-        #if V1
-        withKnownIssue("v1: `Effect.immediate` sees glitched state (readme, Bugs)") {
-            #expect(glitches == 0)
-        }
-        #else
         #expect(glitches == 0)
-        #endif
     }
 
     @Test("equality cutoff: unchanged B does not recompute D")
@@ -180,20 +165,12 @@ struct Correctness {
     func batchedWritesRerunOnce() {
         let a = Signal(0)
         var runs = 0
-        #if V2
         // v2 only has immediate effects; a batch is the equivalent
         let e = Effect.immediate { runs += 1; blackHole(a.value) }
         runs = 0
         batch {
             for _ in 0..<100 { a.value += 1 }
         }
-        #else
-        let scheduler = EffectScheduler()
-        let e = Effect(scheduler: scheduler) { runs += 1; blackHole(a.value) }
-        runs = 0
-        for _ in 0..<100 { a.value += 1 }
-        scheduler.flush()
-        #endif
         blackHole(e)
         #expect(runs == 1)
     }
@@ -355,7 +332,6 @@ struct Correctness {
 
     // MARK: v2 `update`
 
-    #if V2
     // MARK: v2 scopes
 
     @Test("scope: keeps its effects alive without a handle, dispose stops them")
@@ -723,5 +699,4 @@ struct Correctness {
             s.update { v in v += s.value }
         }
     }
-    #endif
 }

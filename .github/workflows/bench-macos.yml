@@ -62,13 +62,13 @@ jobs:
       - name: Build v2 and AG
         working-directory: Benchmarks
         run: |
-          swift build -c release --product BenchmarkV2
+          swift build -c release --product Benchmark
           swift build -c release --product BenchmarkAG
           echo "BIN=$(swift build -c release --show-bin-path)" >> "$GITHUB_ENV"
 
       - name: Run v2
         working-directory: Benchmarks
-        run: mkdir -p out && "$BIN/BenchmarkV2" | tee out/v2.txt
+        run: mkdir -p out && "$BIN/Benchmark" | tee out/v2.txt
 
       - name: Run AttributeGraph (checks, then benchmarks)
         working-directory: Benchmarks
