@@ -40,4 +40,3 @@ scope.dispose()
 ## qol
 - propertyWrapper: `@Computed` property in a class that reference non signal field will make lifetime painful
 - observation
-- some kind of ordering gaurantee?

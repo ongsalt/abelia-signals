@@ -114,4 +114,114 @@ func registerShapes() {
             blackHole(c.value)
         }
     }
+    // MARK: SwiftUI / AttributeGraph-style: one root read per update, batched writes, churn
+
+    // 1000 dependents read through one root, the way a frame reads its root output once
+    benchmark("shape/fan-out 1→1000 via root (one read)") {
+        let s = Signal(0)
+        let subs = (0..<1000).map { i in Computed { s.value &+ i } }
+        let root = Computed { subs.reduce(0) { $0 &+ $1.value } }
+        blackHole(root.value)
+        return {
+            s.value &+= 1
+            blackHole(root.value)
+        }
+    }
+
+    // a transaction: several writes, then one update
+    benchmark("shape/batched writes ×10, one read") {
+        let sources = (0..<10).map { Signal($0) }
+        let mids = sources.map { s in Computed { s.value &* 2 } }
+        let root = Computed { mids.reduce(0) { $0 &+ $1.value } }
+        blackHole(root.value)
+        return {
+            withBatch { for s in sources { s.value &+= 1 } }
+            blackHole(root.value)
+        }
+    }
+
+    // build a small subtree reading a long-lived input, read it, throw it away
+    benchmark("shape/subgraph churn (build 10, read, drop)") {
+        let input = Signal(0)
+        return {
+            var node = Computed { input.value &+ 1 }
+            for _ in 1..<10 {
+                let p = node
+                node = Computed { p.value &+ 1 }
+            }
+            blackHole(node.value)
+        }
+    }
+
+    // MARK: Solid-style: a rendered list, one effect per row (a DOM binding)
+
+    benchmark("solid/create + dispose 1000 rows") {
+        return {
+            let dispose = makeScope {
+                for i in 0..<1000 {
+                    let label = Signal(i)
+                    _ = Effect.immediate { blackHole(label.value) }
+                }
+            }
+            dispose()
+        }
+    }
+
+    benchmark("solid/update every 10th row (1000 rows, batched)") {
+        let labels = (0..<1000).map { Signal($0) }
+        var sink = 0
+        let dispose = makeScope {
+            for label in labels { _ = Effect.immediate { sink &+= label.value } }
+        }
+        return {
+            withBatch {
+                for i in stride(from: 0, to: 1000, by: 10) { labels[i].value &+= 1 }
+            }
+            blackHole(sink)
+            blackHole(dispose)
+        }
+    }
+
+    // per-row `isSelected` computed: moving the selection reruns 2 effects, not 1000
+    benchmark("solid/select row (1000 rows)") {
+        let selected = Signal(-1)
+        var sink = 0
+        let dispose = makeScope {
+            for i in 0..<1000 {
+                let isSelected = Computed { selected.value == i }
+                _ = Effect.immediate { if isSelected.value { sink &+= 1 } }
+            }
+        }
+        var next = 0
+        return {
+            selected.value = next
+            next = (next + 1) % 1000
+            blackHole(sink)
+            blackHole(dispose)
+        }
+    }
 }
+
+// the two libraries spell batching and scopes differently
+#if ALIEN
+func withBatch(_ body: () -> Void) {
+    startBatch()
+    body()
+    endBatch()
+}
+
+func makeScope(_ body: () -> Void) -> () -> Void {
+    let scope = effectScope(body)
+    return { scope.dispose() }
+}
+#else
+func withBatch(_ body: () -> Void) {
+    batch(body: body)
+}
+
+func makeScope(_ body: () -> Void) -> () -> Void {
+    let scope = EffectScope()
+    scope.run(body)
+    return { scope.dispose() }
+}
+#endif

@@ -238,6 +238,7 @@ func registerBenchmarks() {
         }
     }
 
+    // not a shape SwiftUI builds (rules have few inputs): inputs added dynamically one by one
     benchmark("shape/fan-in 1000→1 (write one)") {
         let sources = (0..<1000).map { Attribute(value: $0) }
         let sum = Attribute(SumAll(inputs: sources))
@@ -288,6 +289,47 @@ func registerBenchmarks() {
             sources[i].value &+= 1
             i = (i + 1) % width
             for c in last { blackHole(c.value) }
+        }
+    }
+
+    // MARK: how SwiftUI drives AttributeGraph: one root read per update, batched writes, churn
+
+    benchmark("shape/fan-out 1→1000 via root (one read)") {
+        let s = Attribute(value: 0)
+        let subs = (0..<1000).map { i in Attribute(Plus(input: s, k: i)) }
+        let root = Attribute(SumAll(inputs: subs))
+        blackHole(root.value)
+        return {
+            s.value &+= 1
+            blackHole(root.value)
+        }
+    }
+
+    // no batch API: writes only mark, the read does the one update
+    benchmark("shape/batched writes ×10, one read") {
+        let sources = (0..<10).map { Attribute(value: $0) }
+        let mids = sources.map { Attribute(Times2(input: $0)) }
+        let root = Attribute(SumAll(inputs: mids))
+        blackHole(root.value)
+        return {
+            for s in sources { s.value &+= 1 }
+            blackHole(root.value)
+        }
+    }
+
+    // SwiftUI's unit of churn: a subgraph built, read and invalidated
+    benchmark("shape/subgraph churn (build 10, read, drop)") {
+        let input = Attribute(value: 0)
+        let g = Subgraph.current!.graph
+        return {
+            let sub = Subgraph(graph: g)
+            let prev = Subgraph.current
+            Subgraph.current = sub
+            var node = Attribute(Plus(input: input, k: 1))
+            for _ in 1..<10 { node = Attribute(Plus(input: node, k: 1)) }
+            blackHole(node.value)
+            Subgraph.current = prev
+            sub.invalidate()
         }
     }
 

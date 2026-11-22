@@ -11,7 +11,7 @@ column of "—", so a failed optional run doesn't break the table.
 import re
 import sys
 
-ROW = re.compile(r"^((?:prim|shape)/.+?)\s+([\d.]+ ?[nµm]?s)\s+([\d.]+ ?[nµm]?s)\s+\d+\s*$")
+ROW = re.compile(r"^((?:prim|shape|solid)/.+?)\s+([\d.]+ ?[nµm]?s)\s+([\d.]+ ?[nµm]?s)\s+\d+\s*$")
 
 
 def parse(path):

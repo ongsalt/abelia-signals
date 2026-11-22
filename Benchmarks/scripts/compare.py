@@ -18,7 +18,7 @@ import statistics
 import subprocess
 import sys
 
-ROW = re.compile(r"^((?:prim|shape)/.+?)\s+([\d.]+) ?([nµm]?s)\s+([\d.]+) ?([nµm]?s)\s+\d+\s*$")
+ROW = re.compile(r"^((?:prim|shape|solid)/.+?)\s+([\d.]+) ?([nµm]?s)\s+([\d.]+) ?([nµm]?s)\s+\d+\s*$")
 UNIT = {"ns": 1.0, "µs": 1e3, "ms": 1e6, "s": 1e9}
 
 

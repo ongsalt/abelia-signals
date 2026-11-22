@@ -1,4 +1,4 @@
-import { signal, computed, effect } from "alien-signals"
+import { signal, computed, effect, effectScope, startBatch, endBatch } from "alien-signals"
 import { benchmark, blackHole } from "./harness.ts"
 
 // MARK: 2. Graph shapes — mirror of Sources/Benchmark/Shapes.swift
@@ -108,6 +108,91 @@ export function registerShapes(): void {
     return () => {
       flag(!flag())
       blackHole(c())
+    }
+  })
+
+  // MARK: SwiftUI / AttributeGraph-style
+
+  benchmark("shape/fan-out 1→1000 via root (one read)", () => {
+    const s = signal(0)
+    const subs = Array.from({ length: 1000 }, (_, i) => computed(() => s() + i))
+    const root = computed(() => { let acc = 0; for (const c of subs) acc += c(); return acc })
+    blackHole(root())
+    return () => {
+      s(s() + 1)
+      blackHole(root())
+    }
+  })
+
+  benchmark("shape/batched writes ×10, one read", () => {
+    const sources = Array.from({ length: 10 }, (_, i) => signal(i))
+    const mids = sources.map((s) => computed(() => s() * 2))
+    const root = computed(() => { let acc = 0; for (const m of mids) acc += m(); return acc })
+    blackHole(root())
+    return () => {
+      startBatch()
+      for (const s of sources) s(s() + 1)
+      endBatch()
+      blackHole(root())
+    }
+  })
+
+  benchmark("shape/subgraph churn (build 10, read, drop)", () => {
+    const input = signal(0)
+    return () => {
+      let node = computed(() => input() + 1)
+      for (let i = 1; i < 10; i++) {
+        const p = node
+        node = computed(() => p() + 1)
+      }
+      blackHole(node())
+    }
+  })
+
+  // MARK: Solid-style: a rendered list, one effect per row
+
+  benchmark("solid/create + dispose 1000 rows", () => {
+    return () => {
+      const dispose = effectScope(() => {
+        for (let i = 0; i < 1000; i++) {
+          const label = signal(i)
+          effect(() => { blackHole(label()) })
+        }
+      })
+      dispose()
+    }
+  })
+
+  benchmark("solid/update every 10th row (1000 rows, batched)", () => {
+    const labels = Array.from({ length: 1000 }, (_, i) => signal(i))
+    let sink = 0
+    const dispose = effectScope(() => {
+      for (const label of labels) effect(() => { sink += label() })
+    })
+    return () => {
+      startBatch()
+      for (let i = 0; i < 1000; i += 10) labels[i](labels[i]() + 1)
+      endBatch()
+      blackHole(sink)
+      blackHole(dispose)
+    }
+  })
+
+  benchmark("solid/select row (1000 rows)", () => {
+    const selected = signal(-1)
+    let sink = 0
+    const dispose = effectScope(() => {
+      for (let i = 0; i < 1000; i++) {
+        const isSelected = computed(() => selected() === i)
+        effect(() => { if (isSelected()) sink += 1 })
+      }
+    })
+    let next = 0
+    return () => {
+      selected(next)
+      next = (next + 1) % 1000
+      blackHole(sink)
+      blackHole(dispose)
     }
   })
 }
