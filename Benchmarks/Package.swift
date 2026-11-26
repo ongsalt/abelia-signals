@@ -54,6 +54,19 @@ let package = Package(
             linkerSettings: [.linkedLibrary("m")],
         ),
 
+        // BenchmarkCompute's source (symlinked) on SignalGraph, the root package's AG-compatible API
+        .executableTarget(
+            name: "BenchmarkSignalGraph",
+            dependencies: [
+                .product(name: "SignalGraph", package: "abelia-signals")
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+                .define("SIGNALGRAPH"),
+            ],
+            linkerSettings: [.linkedLibrary("m")],
+        ),
+
         // a subset of the suite on Compute: no effects, no create benchmarks
         .executableTarget(
             name: "BenchmarkCompute",

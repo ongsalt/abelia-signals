@@ -1,7 +1,8 @@
-// The suite's subset that maps onto the AttributeGraph API. Built twice:
-//   BenchmarkCompute → Compute (jcmosc's reimplementation)
-//   BenchmarkAG      → Apple's AttributeGraph via OpenAttributeGraphShims (macOS only, `-D AG`, symlinked)
-// Both expose the same Swift API (Graph, Subgraph, Attribute, Rule), so the code is shared.
+// The suite's subset that maps onto the AttributeGraph API. Built three times:
+//   BenchmarkCompute     → Compute (jcmosc's reimplementation)
+//   BenchmarkAG          → Apple's AttributeGraph via OpenAttributeGraphShims (macOS only, `-D AG`, symlinked)
+//   BenchmarkSignalGraph → SignalGraph, the same API on AbeliaSignals (`-D SIGNALGRAPH`, symlinked)
+// All expose the same Swift API (Graph, Subgraph, Attribute, Rule), so the code is shared.
 // Same case names and harness as Benchmark/BenchmarkAlien so the numbers line up.
 //
 //   signal   = Attribute(value:)            read/write `.value`
@@ -14,7 +15,9 @@
 //   swift run -c release BenchmarkCompute check      → checks only
 //   swift run -c release BenchmarkCompute <filter>   → benchmarks whose name contains <filter>
 
-#if AG
+#if SIGNALGRAPH
+import SignalGraph
+#elseif AG
 import OpenAttributeGraphShims
 
 // without the env var the shims build OpenAttributeGraph's own engine, which is still a stub
@@ -168,6 +171,257 @@ func runChecks() {
         print("\(ok ? "✓" : "✗") \(padded) \(expected)         \(actual)")
     }
     print("\(checks.count - failed)/\(checks.count) passed\n")
+}
+
+// MARK: behavior probes: printed, not checked; diff the output between backends
+
+struct Pick: Rule {
+    @Attribute var flag: Bool
+    @Attribute var a: Int
+    @Attribute var b: Int
+    let counter: Counter
+    var value: Int {
+        counter.runs += 1
+        return flag ? a : b
+    }
+}
+
+final class Log {
+    var entries: [String] = []
+}
+
+struct WhichChanged: Rule {
+    @Attribute var a: Int
+    @Attribute var b: Int
+    let log: Log
+    var value: Int {
+        let (av, ac) = context.changedValue(of: $a, options: [])
+        let (bv, bc) = context.changedValue(of: $b, options: [])
+        log.entries.append(ac || bc ? (ac ? "a" : "") + (bc ? "b" : "") : "-")
+        return av &+ bv
+    }
+}
+
+struct RunningSum: StatefulRule {
+    typealias Value = Int
+    @Attribute var input: Int
+    mutating func updateValue() {
+        value = (hasValue ? value : 0) &+ input
+    }
+}
+
+struct Adder: Rule {
+    @Attribute var input: Int
+    var k: Int
+    let counter: Counter
+    var value: Int {
+        counter.runs += 1
+        return input &+ k
+    }
+}
+
+struct Untracked: Rule {
+    @Attribute var input: Int
+    let counter: Counter
+    var value: Int {
+        counter.runs += 1
+        return Graph.withoutUpdate { input }
+    }
+}
+
+struct Read<T>: Rule {
+    @Attribute var input: T
+    let counter: Counter
+    var value: T {
+        counter.runs += 1
+        return input
+    }
+}
+
+struct Pair {
+    var a: Int
+    var b: Int
+}
+
+// not Equatable: POD, and not POD
+struct PlainPOD {
+    var x: Int
+}
+
+struct PlainBoxed {
+    var s: String
+}
+
+struct ToPlainPOD: Rule {
+    @Attribute var input: Int
+    var value: PlainPOD { PlainPOD(x: input / 1000) }
+}
+
+struct ToPlainBoxed: Rule {
+    @Attribute var input: Int
+    var value: PlainBoxed { PlainBoxed(s: input < 1000 ? "small" : "big") }
+}
+
+struct ToDouble: Rule {
+    @Attribute var input: Int
+    var value: Double { input >= 0 ? .nan : 0 }
+}
+
+func runProbes() {
+    var probes: [(String, String)] = []
+
+    do {
+        let flag = Attribute(value: true)
+        let a = Attribute(value: 1)
+        let b = Attribute(value: 2)
+        let counter = Counter()
+        let c = Attribute(Pick(flag: flag, a: a, b: b, counter: counter))
+        blackHole(c.value)
+        flag.value = false
+        blackHole(c.value)
+        counter.runs = 0
+        a.value = 10
+        blackHole(c.value)
+        probes.append(("dynamic deps: write a stale input, reruns", "\(counter.runs)"))
+    }
+    do {
+        let a = Attribute(value: 1)
+        let b = Attribute(value: 2)
+        let log = Log()
+        let c = Attribute(WhichChanged(a: a, b: b, log: log))
+        blackHole(c.value)
+        b.value = 20
+        blackHole(c.value)
+        a.value = 10
+        b.value = 30
+        blackHole(c.value)
+        probes.append(("context.changedValue(of:): first, write b, write both", log.entries.joined(separator: " ")))
+    }
+    do {
+        let a = Attribute(value: 0)
+        let c = Attribute(Plus(input: a, k: 0))
+        let first = c.changedValue().changed
+        let again = c.changedValue().changed
+        a.value = 1
+        let afterWrite = c.changedValue().changed
+        a.value = 2
+        let external = a.changedValue().changed
+        probes.append(("changedValue() outside: first, again, after write", "\(first) \(again) \(afterWrite)"))
+        probes.append(("changedValue() outside on a written external", "\(external)"))
+    }
+    do {
+        let a = Attribute(value: 0)
+        let same = a.setValue(0)
+        let different = a.setValue(1)
+        probes.append(("setValue: same, different", "\(same) \(different)"))
+    }
+    do {
+        let a = Attribute(value: 1)
+        let sum = Attribute(RunningSum(input: a))
+        var seen: [Int] = [sum.value]
+        for v in [2, 3] {
+            a.value = v
+            seen.append(sum.value)
+        }
+        blackHole(sum.value)
+        seen.append(sum.value)
+        probes.append(("StatefulRule running sum, reads after writes 2, 3, none", seen.map(String.init).joined(separator: " ")))
+    }
+    do {
+        let a = Attribute(value: 1)
+        let counter = Counter()
+        let c = Attribute(Adder(input: a, k: 0, counter: counter))
+        blackHole(c.value)
+        c.mutateBody(as: Adder.self, invalidating: false) { $0.k = 100 }
+        let quiet = c.value
+        c.mutateBody(as: Adder.self, invalidating: true) { $0.k = 10 }
+        let loud = c.value
+        probes.append(("mutateBody invalidating: false, then true", "\(quiet) \(loud)"))
+    }
+    do {
+        let a = Attribute(value: 1)
+        let counter = Counter()
+        let c = Attribute(Untracked(input: a, counter: counter))
+        blackHole(c.value)
+        counter.runs = 0
+        a.value = 2
+        blackHole(c.value)
+        probes.append(("Graph.withoutUpdate read, reruns after write", "\(counter.runs)"))
+    }
+    do {
+        let pair = Attribute(value: Pair(a: 1, b: 2))
+        let counter = Counter()
+        let c = Attribute(Read(input: pair.a, counter: counter))
+        blackHole(c.value)
+        counter.runs = 0
+        pair.value.b = 3
+        blackHole(c.value)
+        let afterB = counter.runs
+        pair.value.a = 4
+        probes.append(("focus pair.a: reruns after writing b; value after writing a", "\(afterB) \(c.value)"))
+    }
+    do {
+        let x = Attribute(value: 1)
+        let y = Attribute(value: 2)
+        let indirect = IndirectAttribute(source: x)
+        let counter = Counter()
+        let c = Attribute(Read(input: indirect.projectedValue, counter: counter))
+        let before = c.value
+        indirect.source = y
+        let switched = c.value
+        counter.runs = 0
+        x.value = 10
+        blackHole(c.value)
+        probes.append(("indirect: value, after switch, reruns on old source", "\(before) \(switched) \(counter.runs)"))
+    }
+    do {
+        let prev = Subgraph.current!
+        let sub = Subgraph(graph: prev.graph)
+        Subgraph.current = sub
+        let a = Attribute(value: 7)
+        let weak = WeakAttribute(a)
+        Subgraph.current = prev
+        let before = weak.value.map(String.init) ?? "nil"
+        sub.invalidate()
+        let after = weak.value.map(String.init) ?? "nil"
+        probes.append(("WeakAttribute before, after invalidate; isValid", "\(before) \(after) \(sub.isValid)"))
+    }
+    do {
+        let a = Attribute(value: 0)
+        let pod = Attribute(ToPlainPOD(input: a))
+        let boxed = Attribute(ToPlainBoxed(input: a))
+        let podCounter = Counter()
+        let boxedCounter = Counter()
+        let c1 = Attribute(Read(input: pod, counter: podCounter))
+        let c2 = Attribute(Read(input: boxed, counter: boxedCounter))
+        blackHole(c1.value)
+        blackHole(c2.value)
+        podCounter.runs = 0
+        boxedCounter.runs = 0
+        a.value = 1
+        blackHole(c1.value)
+        blackHole(c2.value)
+        probes.append(("cutoff, not Equatable: POD reruns, non-POD reruns", "\(podCounter.runs) \(boxedCounter.runs)"))
+    }
+    do {
+        let a = Attribute(value: 0)
+        let d = Attribute(ToDouble(input: a))
+        let counter = Counter()
+        let c = Attribute(Read(input: d, counter: counter))
+        blackHole(c.value)
+        counter.runs = 0
+        a.value = 1
+        blackHole(c.value)
+        let nanExternal = Attribute(value: Double.nan)
+        probes.append(("cutoff, NaN rule output: reruns; NaN external setValue(NaN)", "\(counter.runs) \(nanExternal.setValue(.nan))"))
+    }
+
+    print("probe                                                                              observed")
+    for (name, observed) in probes {
+        let padded = name.count >= 82 ? name : name + String(repeating: " ", count: 82 - name.count)
+        print("  \(padded) \(observed)")
+    }
+    print()
 }
 
 // MARK: benchmarks
@@ -333,8 +587,7 @@ func registerBenchmarks() {
         }
     }
 
-    // note: AttributeGraph keeps inputs it has seen, so this isn't quite the same
-    // semantics as the signals libraries (which drop the stale branch)
+    // AttributeGraph drops inputs the last run didn't read, like the signals libraries
     benchmark("shape/dynamic deps (switch 50↔50)") {
         let flag = Attribute(value: true)
         let xs = (0..<100).map { Attribute(value: $0) }
@@ -351,6 +604,7 @@ let filter = CommandLine.arguments.dropFirst().first
 
 if filter == nil || filter == "check" {
     runChecks()
+    runProbes()
 }
 
 if filter != "check" {

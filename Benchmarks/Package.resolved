@@ -1,0 +1,15 @@
+{
+  "originHash" : "5bf6431eb85d0a1eee4db8c4f96976bec6c5028a7bae5a8c1b6269efa62047ba",
+  "pins" : [
+    {
+      "identity" : "compute",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jcmosc/Compute",
+      "state" : {
+        "branch" : "main",
+        "revision" : "001a69b619e399efda554a61b733b6c0344987c5"
+      }
+    }
+  ],
+  "version" : 3
+}

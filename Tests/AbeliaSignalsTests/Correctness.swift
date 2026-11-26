@@ -131,6 +131,37 @@ struct Correctness {
         #expect(runs == 1)
     }
 
+    @Test("invalidate: recomputes on the next read, lazily")
+    func invalidateRecomputes() {
+        var k = 1
+        var runs = 0
+        let c = Computed { runs += 1; return k }
+        blackHole(c.value)
+        runs = 0
+        k = 2
+        c.invalidate()
+        #expect(runs == 0)
+        #expect(c.value == 2)
+        #expect(runs == 1)
+    }
+
+    @Test("invalidate: dependents rerun only if the value changed")
+    func invalidateCutoff() {
+        var k = 1
+        let c = Computed { k }
+        let d = Computed { c.value * 10 }
+        var runs = 0
+        let e = Effect.immediate { runs += 1; blackHole(d.value) }
+        runs = 0
+        c.invalidate()
+        #expect(runs == 0)
+        k = 2
+        c.invalidate()
+        #expect(runs == 1)
+        #expect(d.value == 20)
+        blackHole(e)
+    }
+
     @Test("dynamic deps: stale branch no longer triggers recompute")
     func dynamicDepsDropStale() {
         let flag = Signal(true)
