@@ -21,6 +21,12 @@ public final class EffectScope {
     @exclusivity(unchecked)
     var cleanups: [() -> Void] = []
 
+    #if DEBUG
+    @usableFromInline
+    @exclusivity(unchecked)
+    var createdIn: IsolationKey = .unknown
+    #endif
+
     @inlinable
     public convenience init() {
         self.init(attached: true)
@@ -31,10 +37,22 @@ public final class EffectScope {
         if attached, let parent = EffectScope.current {
             parent.adopt(self)
         }
+        #if DEBUG
+        createdIn = .current
+        #endif
+    }
+
+    // only scopes owned by another scope
+    @inlinable
+    func assertUsedWhereOwned() {
+        #if DEBUG
+        assert(parent == nil || createdIn.isCurrent, "EffectScope used away from its parent (sent with `sending`?)")
+        #endif
     }
 
     @inlinable
     public func run<R, E>(_ body: () throws(E) -> R) throws(E) -> R {
+        assertUsedWhereOwned()
         let prev = EffectScope.current
         EffectScope.current = self
         defer { EffectScope.current = prev }
@@ -44,6 +62,7 @@ public final class EffectScope {
     /// Resets then detaches
     @inlinable
     public func dispose() {
+        assertUsedWhereOwned()
         reset()
         parent?.release(self)
     }

@@ -1,6 +1,8 @@
 #ifndef ABELIA_SIGNALS_TLS_H
 #define ABELIA_SIGNALS_TLS_H
 
+#include <stdint.h>
+
 // initial-exec: one %fs-relative access instead of a __tls_get_addr call, also when this is
 // built into a shared library (an executable gets that anyway). Not for a library dlopen'd later.
 // ELF only, Mach-O thread-locals have their own access path.
@@ -14,5 +16,8 @@ extern _Thread_local void *_Nullable abelia_tls_current_sink ABELIA_TLS_MODEL;
 extern _Thread_local void *_Nullable abelia_tls_immediate_batch ABELIA_TLS_MODEL;
 extern _Thread_local void *_Nullable abelia_tls_current_scope ABELIA_TLS_MODEL;
 extern _Thread_local void *_Nullable abelia_tls_current_scheduler ABELIA_TLS_MODEL;
+
+// current actor, main (1), or thread; 0 = unknown (task on the global executor)
+uintptr_t abelia_current_isolation_key(void);
 
 #endif

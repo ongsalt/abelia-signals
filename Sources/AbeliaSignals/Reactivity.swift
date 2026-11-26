@@ -584,6 +584,12 @@ public final class Effect: NodeWrapper {
     @exclusivity(unchecked)
     var isDisposed = false
 
+    #if DEBUG
+    @usableFromInline
+    @exclusivity(unchecked)
+    var createdIn: IsolationKey = .unknown
+    #endif
+
     @discardableResult
     @inlinable
     public init(
@@ -598,6 +604,9 @@ public final class Effect: NodeWrapper {
         super.init(isEffect: true)
         innerScope.ownerEffect = self
         EffectScope.current?.adopt(self)
+        #if DEBUG
+        createdIn = .current
+        #endif
         node.pointee.state = .dirty
         // inside a batch, like every run: a write in the body only queues, it can't rerun this
         // effect while the body is still running
@@ -607,6 +616,7 @@ public final class Effect: NodeWrapper {
     @inlinable
     public func dispose() {
         if isDisposed { return }
+        assertUsedWhereOwned()
         let owner = scope
         disposeOwned()
         owner?.release(self)
@@ -635,6 +645,17 @@ public final class Effect: NodeWrapper {
         flush.schedule(self)
     }
 
+    // only effects with an owner the compiler can't see
+    @inlinable
+    func assertUsedWhereOwned() {
+        #if DEBUG
+        assert(
+            (scope == nil && capturedScheduler == nil) || createdIn.isCurrent,
+            "Effect used away from its owner (sent with `sending`?)"
+        )
+        #endif
+    }
+
     // .dirty -> yes. `.maybe` -> check
     @inlinable
     func willRerun() -> Bool {
@@ -650,6 +671,7 @@ public final class Effect: NodeWrapper {
     @inlinable
     func runEffect(force: Bool = false) {
         if isDisposed { return }
+        assertUsedWhereOwned()
 
         // Owner first, without running it here (it may be on another scheduler)
         // if parent dirty -> self gonna be disposed anywhere
