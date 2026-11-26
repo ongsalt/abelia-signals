@@ -138,6 +138,10 @@ class DerivedNode<Value>: ValueNode<Value> {
     @usableFromInline
     @exclusivity(unchecked)
     var hasRun = false
+    // an initial value is the first result: the body runs only once invalidated
+    @usableFromInline
+    @exclusivity(unchecked)
+    var usesInitialValue = false
 
     @inlinable
     init(subgraph: Subgraph, equals: ((Value, Value) -> Bool)?) {
@@ -171,7 +175,13 @@ class DerivedNode<Value>: ValueNode<Value> {
         defer { currentRule = saved }
 
         prevRun = lastRun
-        let value = compute()
+        let value: Value
+        if usesInitialValue {
+            usesInitialValue = false
+            value = output!
+        } else {
+            value = compute()
+        }
         if alwaysChanges || !hasRun { markChanged() }
         hasRun = true
         lastRun = epoch
@@ -189,11 +199,14 @@ class DerivedNode<Value>: ValueNode<Value> {
         precondition(!hasValue, "can only set initial value of computed attributes: \(AnyAttribute(node: self))")
         markChanged()
         output = value
+        usesInitialValue = true
         return true
     }
 
+    // AttributeGraph counts it as a body modification (`currentWasModified`)
     @inlinable
     override func invalidateValue() {
+        bodyWasModified = true
         computed.invalidate()
     }
 }
@@ -218,6 +231,7 @@ final class RuleNode<Body, Value>: DerivedNode<Value> {
         self.run = run
         super.init(subgraph: subgraph, equals: equals)
         output = initialValue
+        usesInitialValue = initialValue != nil
     }
 
     @inlinable
@@ -238,7 +252,6 @@ extension RuleNode: BodyMutating {
         withUnsafeMutablePointer(to: &body) { pointer in
             pointer.withMemoryRebound(to: B.self, capacity: 1) { mutator(&$0.pointee) }
         }
-        bodyWasModified = true
         if invalidating { invalidateValue() }
     }
 }

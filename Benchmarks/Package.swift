@@ -9,16 +9,7 @@ let package = Package(
     // Synchronization (root package) and Apple's AttributeGraph stubs both need macOS 15
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(path: ".."),
-        // AttributeGraph reimplementation. Until the fix is upstream:
-        //   swift package edit Compute
-        //   add `#include <cstdint>` to Packages/Compute/Sources/ComputeCxx/Data/Pointer.h
-        // and build with (libswiftDemangle is in the toolchain's usr/lib; the manifest cache
-        // otherwise keeps Compute's pre-edit header paths):
-        //   swift build -c release --manifest-cache none --product BenchmarkCompute \
-        //     -Xcxx -DNDEBUG -Xcxx -O2 \
-        //     -Xlinker -L -Xlinker <toolchain>/usr/lib -Xlinker -rpath -Xlinker <toolchain>/usr/lib
-        .package(url: "https://github.com/jcmosc/Compute", branch: "main"),
+        .package(path: "..")
     ],
     targets: [
         .executableTarget(
@@ -67,6 +58,36 @@ let package = Package(
             linkerSettings: [.linkedLibrary("m")],
         ),
 
+        // Conformance tests: Tests/Conformance (symlinked as Shared) against each backend. Expected
+        // values are Compute's behavior; SignalGraph's deliberate differences are known issues.
+        //   swift test --scratch-path .build-bench <Compute's flags below>
+        .testTarget(
+            name: "SignalGraphConformance",
+            dependencies: [
+                .product(name: "SignalGraph", package: "abelia-signals")
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+                .define("SIGNALGRAPH"),
+            ],
+        ),
+    ],
+)
+
+// AttributeGraph reimplementation. ABELIA_NO_COMPUTE=1 leaves it out (CI: it may not build on macOS).
+// Until the fix is upstream:
+//   swift package edit Compute
+//   add `#include <cstdint>` to Packages/Compute/Sources/ComputeCxx/Data/Pointer.h
+// and build with (libswiftDemangle is in the toolchain's usr/lib; the manifest cache
+// otherwise keeps Compute's pre-edit header paths):
+//   swift build -c release --manifest-cache none --product BenchmarkCompute \
+//     -Xcxx -DNDEBUG -Xcxx -O2 \
+//     -Xlinker -L -Xlinker <toolchain>/usr/lib -Xlinker -rpath -Xlinker <toolchain>/usr/lib
+if Context.environment["ABELIA_NO_COMPUTE"] == nil {
+    package.dependencies.append(
+        .package(url: "https://github.com/jcmosc/Compute", branch: "main")
+    )
+    package.targets += [
         // a subset of the suite on Compute: no effects, no create benchmarks
         .executableTarget(
             name: "BenchmarkCompute",
@@ -78,8 +99,17 @@ let package = Package(
             ],
             linkerSettings: [.linkedLibrary("m")],
         ),
-    ],
-)
+        .testTarget(
+            name: "ComputeConformance",
+            dependencies: [
+                .product(name: "Compute", package: "Compute")
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+            ],
+        ),
+    ]
+}
 
 // Apple's real AttributeGraph, macOS only: the same source as BenchmarkCompute (symlinked),
 // built against OpenAttributeGraphShims, which re-exports the private framework (linked through
@@ -95,7 +125,7 @@ let package = Package(
 package.dependencies.append(
     .package(url: "https://github.com/OpenSwiftUIProject/OpenAttributeGraph", branch: "main")
 )
-package.targets.append(
+package.targets += [
     .executableTarget(
         name: "BenchmarkAG",
         dependencies: [
@@ -105,6 +135,16 @@ package.targets.append(
             .enableUpcomingFeature("ApproachableConcurrency"),
             .define("AG"),
         ],
-    )
-)
+    ),
+    .testTarget(
+        name: "AGConformance",
+        dependencies: [
+            .product(name: "OpenAttributeGraphShims", package: "OpenAttributeGraph")
+        ],
+        swiftSettings: [
+            .enableUpcomingFeature("ApproachableConcurrency"),
+            .define("AG"),
+        ],
+    ),
+]
 #endif

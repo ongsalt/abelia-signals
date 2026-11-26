@@ -48,8 +48,14 @@ public final class Graph {
 
     @inlinable
     public func invalidate() {
+        let subgraphs = subgraphs
+        self.subgraphs = []
         for entry in subgraphs { entry.subgraph?.invalidate() }
-        subgraphs = []
+    }
+
+    // its subgraphs don't keep it alive
+    deinit {
+        invalidate()
     }
 
     /// Reads in `body` aren't tracked by the current rule.
@@ -62,9 +68,10 @@ public final class Graph {
     }
 }
 
-/// Owns its attributes: they live until it's invalidated.
+/// Owns its attributes: they live until it's invalidated. Doesn't keep its graph alive.
 public final class Subgraph {
-    public let graph: Graph
+    @usableFromInline
+    unowned(unsafe) let _graph: Graph
     @usableFromInline
     @exclusivity(unchecked)
     var nodes: [AttributeNode] = []
@@ -74,7 +81,7 @@ public final class Subgraph {
 
     @usableFromInline
     @exclusivity(unchecked)
-    var children: [Subgraph] = []
+    var children: [(subgraph: Subgraph, tag: UInt8)] = []
     @usableFromInline
     @exclusivity(unchecked)
     var parents: [Unowned] = []
@@ -102,9 +109,16 @@ public final class Subgraph {
 
     @inlinable
     public init(graph: Graph) {
-        self.graph = graph
+        _graph = graph
         graph.subgraphs.append(Graph.WeakSubgraph(self))
     }
+
+    deinit {
+        invalidate()
+    }
+
+    @inlinable
+    public var graph: Graph { _graph }
 
     @inlinable
     public convenience init(graph: Graph, attribute: AnyAttribute) {
@@ -124,13 +138,33 @@ public final class Subgraph {
 
     @inlinable
     public func addChild(_ child: Subgraph) {
-        children.append(child)
+        addChild(child, tag: 0)
+    }
+
+    /// Only the low 2 bits of `tag` are kept, as in AttributeGraph.
+    @inlinable
+    public func addChild(_ child: Subgraph, tag: UInt8) {
+        children.append((child, tag & 0b11))
         child.parents.append(Unowned(subgraph: self))
     }
 
     @inlinable
-    public func addChild(_ child: Subgraph, tag: UInt8) {
-        addChild(child)
+    public func removeChild(_ child: Subgraph) {
+        guard let i = children.firstIndex(where: { $0.subgraph === child }) else { return }
+        children.remove(at: i)
+        if let j = child.parents.firstIndex(where: { $0.subgraph === self }) { child.parents.remove(at: j) }
+    }
+
+    @inlinable
+    public func child(at index: UInt32, tag: UnsafeMutablePointer<UInt8>?) -> Subgraph {
+        let entry = children[Int(index)]
+        tag?.pointee = entry.tag
+        return entry.subgraph
+    }
+
+    @inlinable
+    public func parent(at index: Int64) -> Subgraph {
+        parents[Int(index)].subgraph
     }
 
     @inlinable
@@ -141,7 +175,7 @@ public final class Subgraph {
 
     @inlinable
     public func isAncestor(of other: Subgraph) -> Bool {
-        children.contains { $0 === other || $0.isAncestor(of: other) }
+        children.contains { $0.subgraph === other || $0.subgraph.isAncestor(of: other) }
     }
 
     @inlinable
@@ -151,13 +185,19 @@ public final class Subgraph {
         return nextObserverID
     }
 
-    /// Destroys its attributes, and children left without a valid parent.
+    @inlinable
+    public func removeObserver(_ id: Int) {
+        observers.removeAll { $0.id == id }
+    }
+
+    /// Destroys its attributes, and children left without a valid parent. Also on deinit.
     @inlinable
     public func invalidate() {
         guard _isValid else { return }
         _isValid = false
+        if Subgraph.current === self { Subgraph.current = nil }
 
-        for child in children {
+        for (child, _) in children {
             child.parents.removeAll { $0.subgraph === self }
             if !child.parents.contains(where: { $0.subgraph.isValid }) { child.invalidate() }
         }

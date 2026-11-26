@@ -1,0 +1,97 @@
+name: Conformance (macOS, real AttributeGraph)
+
+# Benchmarks/Tests/Conformance against Apple's AttributeGraph (via OpenAttributeGraphShims) and
+# SignalGraph. Expected values are Compute's behavior (checked locally on Linux), so an AG failure
+# is a place where Compute and AttributeGraph disagree.
+# manual only: Actions → "Conformance (macOS, real AttributeGraph)" → Run workflow
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    name: conformance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # DarwinPrivateFrameworks only ships AttributeGraph stubs for the 2024 release (macOS 15)
+          - os: macos-15
+            experimental: false
+          - os: macos-26
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    env:
+      # read by OpenAttributeGraph's manifest: back OpenAttributeGraphShims with Apple's AttributeGraph
+      OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_ATTRIBUTEGRAPH: 1
+      OPENATTRIBUTEGRAPH_TARGET_RELEASE: 2024
+      DARWINPRIVATEFRAMEWORKS_TARGET_RELEASE: 2024
+      OPENATTRIBUTEGRAPH_LIBRARY_EVOLUTION: 0
+      DARWINPRIVATEFRAMEWORKS_LIBRARY_EVOLUTION: 0
+      # read by Benchmarks/Package.swift: leave Compute out, it needs a local edit to build
+      ABELIA_NO_COMPUTE: 1
+      SWIFT_VERSION: "6.4"
+    steps:
+      - uses: actions/checkout@v4
+
+      # the manifests are swift-tools-version 6.4, newer than the Xcode toolchains on the images
+      - name: Install Swift ${{ env.SWIFT_VERSION }} (swiftly)
+        run: |
+          curl -fsSL -o swiftly.pkg https://download.swift.org/swiftly/darwin/swiftly.pkg
+          installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+          ~/.swiftly/bin/swiftly init --quiet-shell-followup --assume-yes --skip-install
+          . "${SWIFTLY_HOME_DIR:-$HOME/.swiftly}/env.sh"
+          swiftly install --use "$SWIFT_VERSION"
+          echo "${SWIFTLY_BIN_DIR:-$HOME/.swiftly/bin}" >> "$GITHUB_PATH"
+          swift --version
+
+      - name: Build tests
+        working-directory: Benchmarks
+        run: swift build --build-tests
+
+      - name: AttributeGraph
+        id: ag
+        continue-on-error: true
+        working-directory: Benchmarks
+        run: |
+          set -o pipefail
+          mkdir -p out
+          swift test --skip-build --filter AGConformance 2>&1 | tee out/ag.txt
+
+      - name: SignalGraph
+        id: signalgraph
+        continue-on-error: true
+        working-directory: Benchmarks
+        run: |
+          set -o pipefail
+          swift test --skip-build --filter SignalGraphConformance 2>&1 | tee out/signalgraph.txt
+
+      - name: Summary
+        if: always()
+        working-directory: Benchmarks
+        run: |
+          {
+            echo "## ${{ matrix.os }}"
+            for name in ag signalgraph; do
+              echo
+              echo "### $name"
+              echo
+              echo '```'
+              # failures, known issues and the totals
+              grep -E '^(✘|━)|Test run with' "out/$name.txt" || echo "(no output)"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if AttributeGraph or SignalGraph failed
+        if: steps.ag.outcome == 'failure' || steps.signalgraph.outcome == 'failure'
+        run: exit 1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformance-${{ matrix.os }}
+          path: Benchmarks/out/

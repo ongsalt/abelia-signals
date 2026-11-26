@@ -100,6 +100,19 @@ public struct RuleContext<Value>: Equatable {
         return (value, node.changedAt > attribute.identifier.node.prevRun)
     }
 
+    // AttributeGraph's spelling
+    @inlinable
+    public subscript<T>(attribute input: Attribute<T>) -> T { input.value }
+
+    @inlinable
+    public subscript<T>(weakAttribute input: WeakAttribute<T>) -> T? { input.attribute.map { self[attribute: $0] } }
+
+    @inlinable
+    public subscript<T>(optionalAttribute input: OptionalAttribute<T>) -> T? {
+        input.attribute.map { self[attribute: $0] }
+    }
+
+    // Compute's spelling
     @inlinable
     public subscript<T>(_ input: Attribute<T>) -> T { input.value }
 
@@ -139,6 +152,19 @@ public struct AnyRuleContext: Equatable {
         let node = input.node
         let value = node.read()
         return (value, node.changedAt > attribute.node.prevRun)
+    }
+
+    @inlinable
+    public subscript<Value>(attribute input: Attribute<Value>) -> Value { input.value }
+
+    @inlinable
+    public subscript<Value>(weakAttribute input: WeakAttribute<Value>) -> Value? {
+        input.attribute.map { self[attribute: $0] }
+    }
+
+    @inlinable
+    public subscript<Value>(optionalAttribute input: OptionalAttribute<Value>) -> Value? {
+        input.attribute.map { self[attribute: $0] }
     }
 
     @inlinable
