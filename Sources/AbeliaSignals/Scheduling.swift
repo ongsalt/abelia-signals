@@ -132,17 +132,14 @@ func runOnActor<A: Actor>(_ actor: isolated A, operation: () -> Void) {
     operation()
 }
 
-extension Flush {
-    @usableFromInline
-    static var current: Flush? {
-        EffectScheduler.current.map { .scheduler($0) }
-    }
-}
 
 /// Effects created synchronously inside `body` (on this thread) use `scheduler`.
-public func withEffectScheduler<T>(_ scheduler: EffectScheduler, body: () -> T) -> T {
+public func withEffectScheduler<R, E>(
+    _ scheduler: EffectScheduler,
+    body: () throws(E) -> R
+) throws(E) -> R {
     let prev = EffectScheduler.current
     EffectScheduler.current = scheduler
     defer { EffectScheduler.current = prev }
-    return body()
+    return try body()
 }

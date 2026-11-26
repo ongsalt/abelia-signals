@@ -1,11 +1,5 @@
 @preconcurrency import AbeliaSignalsTLS
 
-class Runtime {
-    // global/ambient state needed:
-    // - current sink: transient tls
-    // - current effect scope: transient tls
-}
-
 @usableFromInline
 enum State {
     case dirty
@@ -354,8 +348,7 @@ public class NodeWrapper {
     @inlinable
     func becameDirty(confident: Bool) {}
 
-    @inlinable
-    public func dump() {
+    internal func dump() {
         print(node.pointee)
     }
 
