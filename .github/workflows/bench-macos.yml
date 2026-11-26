@@ -1,6 +1,7 @@
 name: Benchmarks (macOS, real AttributeGraph)
 
-# v2, Apple's AttributeGraph (via OpenAttributeGraphShims), Compute and alien-signals on Node,
+# v2, Apple's AttributeGraph (via OpenAttributeGraphShims), SignalGraph (the AG API on v2), Compute
+# and alien-signals on Node,
 # all on the same runner so the numbers are comparable with each other (not with local runs).
 # manual only: Actions → "Benchmarks (macOS, real AttributeGraph)" → Run workflow
 on:
@@ -59,11 +60,12 @@ jobs:
         with:
           node-version: 24
 
-      - name: Build v2 and AG
+      - name: Build v2, AG and SignalGraph
         working-directory: Benchmarks
         run: |
           swift build -c release --product Benchmark
           swift build -c release --product BenchmarkAG
+          swift build -c release --product BenchmarkSignalGraph
           echo "BIN=$(swift build -c release --show-bin-path)" >> "$GITHUB_ENV"
 
       - name: Run v2
@@ -75,6 +77,12 @@ jobs:
         run: |
           set -o pipefail
           "$BIN/BenchmarkAG" | tee out/ag.txt
+
+      - name: Run SignalGraph (checks, then benchmarks)
+        working-directory: Benchmarks
+        run: |
+          set -o pipefail
+          "$BIN/BenchmarkSignalGraph" | tee out/signalgraph.txt
 
       # separate build dir: the C++ flags differ, and Compute is allowed to fail
       - name: Build and run Compute
@@ -109,6 +117,7 @@ jobs:
             python3 scripts/table.py \
               "v2=out/v2.txt" \
               "AttributeGraph=out/ag.txt" \
+              "SignalGraph=out/signalgraph.txt" \
               "Compute=out/compute.txt" \
               "alien (node)=out/node.txt"
           } >> "$GITHUB_STEP_SUMMARY"
