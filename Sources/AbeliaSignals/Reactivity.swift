@@ -217,6 +217,23 @@ extension NodeRef {
         }
     }
 
+    // self dirty, sinks maybe: only the recompute knows whether it changed
+    @inlinable
+    func invalidate() {
+        guard markDirty(direct: true) else { return }
+        var next: [NodeRef] = []
+        for k in pointee.sinks.indices {
+            next.append(pointee.sinks[k].node)
+        }
+        while let top = next.popLast() {
+            if top.markDirty(direct: false) {
+                for m in top.pointee.sinks.indices {
+                    next.append(top.pointee.sinks[m].node)
+                }
+            }
+        }
+    }
+
     // returns: should mark sinks dirty
     @inlinable
     func markDirty(direct: Bool) -> Bool {
@@ -518,6 +535,17 @@ public final class Computed<T>: NodeWrapper {
         self.computation = computation
         self.equals = equals
         super.init(update: update)
+    }
+
+    /// Recomputes on the next read, as if a source had changed. Dependents rerun only if the
+    /// new value differs.
+    @inlinable
+    public func invalidate() {
+        if ImmediateBatch.current == nil {
+            batch { node.invalidate() }
+        } else {
+            node.invalidate()
+        }
     }
 
     @inlinable
