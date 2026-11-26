@@ -36,6 +36,7 @@ scope.dispose()
 
 # Todo
 - put Effect scope in the graph??
+- loop detection
 
 ## qol
 - propertyWrapper: `@Computed` property in a class that reference non signal field will make lifetime painful

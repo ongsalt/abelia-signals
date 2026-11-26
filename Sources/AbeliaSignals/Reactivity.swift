@@ -396,7 +396,7 @@ public final class Signal<T>: NodeWrapper {
     }
 
     @inlinable
-    public var peak: T {
+    public var peek: T {
         checkNotUpdating()
         return _value
     }
