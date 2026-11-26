@@ -45,6 +45,16 @@ public final class EffectScheduler {
     }
 }
 
+extension Effect {
+    @discardableResult
+    @inlinable
+    public convenience init(
+        scheduler: EffectScheduler, allowRecurse: Bool = false, effect: @escaping () -> Void
+    ) {
+        self.init(flush: .scheduler(scheduler), allowRecurse: allowRecurse, effect: effect)
+    }
+}
+
 public enum Flush {
     // pretty much fallback now
     // case isolated(any Actor)

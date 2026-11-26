@@ -584,6 +584,7 @@ public final class Effect: NodeWrapper {
     @exclusivity(unchecked)
     var isDisposed = false
 
+    @discardableResult
     @inlinable
     public init(
         flush: Flush? = nil, allowRecurse: Bool = false, effect: @escaping () -> Void
