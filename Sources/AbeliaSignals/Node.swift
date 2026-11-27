@@ -260,7 +260,7 @@ extension NodeRef {
             }
 
             // checked every source and none changed
-            if next == node.pointee.sources.count {
+            if next >= node.pointee.sources.count {
                 node.pointee.state = .clean
                 stack.removeLast()
                 continue

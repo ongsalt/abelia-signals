@@ -79,7 +79,7 @@ public final class Signal<T>: ReactiveNode {
     let usesDefaultEquality: Bool
 
     @inlinable
-    public convenience init(_ value: T, equals: ((T, T) -> Bool)?) {
+    public convenience init(_ value: T, equals: ((T, T) -> Bool)? = nil) {
         self.init(value: value, equals: equals, usesDefaultEquality: false)
     }
 
@@ -137,7 +137,7 @@ extension Signal where T: Equatable {
 extension Signal {
     /// `@Signal(equals: ...) var x = value`
     @inlinable
-    public convenience init(wrappedValue: T, equals: ((T, T) -> Bool)?) {
+    public convenience init(wrappedValue: T, equals: ((T, T) -> Bool)? = nil) {
         self.init(wrappedValue, equals: equals)
     }
 }
