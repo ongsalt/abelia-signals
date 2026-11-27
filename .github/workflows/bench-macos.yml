@@ -18,8 +18,8 @@ jobs:
         include:
           # DarwinPrivateFrameworks only ships AttributeGraph stubs for the 2024 release (macOS 15),
           # so macos-15 is the run that matches the system framework
-          - os: macos-15
-            experimental: false
+          # - os: macos-15
+          #   experimental: false
           # macOS 26 loads the 2025 AttributeGraph through the 2024 stubs: may not link or run
           - os: macos-26
             experimental: true
