@@ -1,3 +1,6 @@
+/// Also a property wrapper: `@Signal var count = 0` reads and writes `value`, `$count` is the
+/// signal. In a struct, copies share the signal.
+@propertyWrapper
 public final class Signal<T>: ReactiveNode {
     @usableFromInline
     @exclusivity(unchecked)
@@ -88,6 +91,16 @@ public final class Signal<T>: ReactiveNode {
         super.init()
         node.pointee.state = .clean
     }
+
+    // property wrapper: these can't be in an extension
+    @inlinable
+    public var wrappedValue: T {
+        get { value }
+        set { value = newValue }
+    }
+
+    @inlinable
+    public var projectedValue: Signal<T> { self }
 }
 
 // kept out of line so the check on the hot path is a load, a compare and a not-taken branch
@@ -116,5 +129,30 @@ extension Signal where T: Equatable {
             _value = newValue
             notifySinks()
         }
+    }
+}
+
+// MARK: property wrapper
+
+extension Signal {
+    /// `@Signal(equals: ...) var x = value`
+    @inlinable
+    public convenience init(wrappedValue: T, equals: ((T, T) -> Bool)?) {
+        self.init(wrappedValue, equals: equals)
+    }
+}
+
+extension Signal where T: Equatable {
+    /// `@Signal var x = value`
+    @inlinable
+    public convenience init(wrappedValue: T) {
+        self.init(wrappedValue)
+    }
+
+    // picks the `==` fast path of `value`
+    @inlinable
+    public var wrappedValue: T {
+        get { value }
+        set { value = newValue }
     }
 }
