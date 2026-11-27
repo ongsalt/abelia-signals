@@ -76,6 +76,89 @@ extension SmallArray {
     }
 }
 
+/// Temporary stack-backed buffer that grows to raw heap memory only past the initial stack
+/// capacity. Single pointer + count + capacity on the hot path: no CoW checks or spill branches.
+@usableFromInline
+struct StackBuffer<T>: ~Copyable {
+    @usableFromInline
+    var ptr: UnsafeMutablePointer<T>
+    @usableFromInline
+    var count: Int = 0
+    @usableFromInline
+    var capacity: Int
+    @usableFromInline
+    var isHeap: Bool = false
+
+    @inlinable
+    init(base: UnsafeMutablePointer<T>, capacity: Int) {
+        self.ptr = base
+        self.capacity = capacity
+    }
+
+    @inlinable
+    var last: T? {
+        count > 0 ? ptr[count - 1] : nil
+    }
+
+    @inlinable
+    mutating func append(_ value: T) {
+        if _slowPath(count == capacity) { grow() }
+        (ptr + count).initialize(to: value)
+        count += 1
+    }
+
+    @usableFromInline
+    @inline(never)
+    mutating func grow() {
+        let newCapacity = Swift.max(capacity * 2, 16)
+        let newPtr = UnsafeMutablePointer<T>.allocate(capacity: newCapacity)
+        newPtr.moveInitialize(from: ptr, count: count)
+        if isHeap { ptr.deallocate() }
+        ptr = newPtr
+        capacity = newCapacity
+        isHeap = true
+    }
+
+    @inlinable
+    @discardableResult
+    mutating func popLast() -> T? {
+        if count == 0 { return nil }
+        count -= 1
+        return (ptr + count).move()
+    }
+
+    @inlinable
+    mutating func removeLast() {
+        count -= 1
+        (ptr + count).deinitialize(count: 1)
+    }
+
+    @inlinable
+    subscript(index: Int) -> T {
+        get { ptr[index] }
+        _modify { yield &ptr[index] }
+    }
+
+    @inlinable
+    deinit {
+        if count > 0 { ptr.deinitialize(count: count) }
+        if _slowPath(isHeap) { ptr.deallocate() }
+    }
+}
+
+@inlinable
+@inline(__always)
+func withStackBuffer<T, R, E>(
+    of _: T.Type = T.self,
+    capacity: Int,
+    _ body: (inout StackBuffer<T>) throws(E) -> R
+) throws(E) -> R {
+    try withUnsafeTemporaryAllocation(of: T.self, capacity: capacity) { raw throws(E) in
+        var buf = StackBuffer<T>(base: raw.baseAddress!, capacity: raw.count)
+        return try body(&buf)
+    }
+}
+
 extension Array {
     @discardableResult
     mutating func swapRemove(at index: Int) -> Element? {

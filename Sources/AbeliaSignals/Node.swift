@@ -194,22 +194,22 @@ extension NodeRef {
     // should not be recursive
     @inlinable
     func propagate() {
-        var next: [NodeRef] = []
-
-        // by index: nothing here mutates the lists being walked
-        for k in pointee.sinks.indices {
-            let sink = pointee.sinks[k].node
-            if sink.markDirty(direct: true) {
-                for m in sink.pointee.sinks.indices {
-                    next.append(sink.pointee.sinks[m].node)
+        withStackBuffer(of: NodeRef.self, capacity: 64) { next in
+            // by index: nothing here mutates the lists being walked
+            for k in pointee.sinks.indices {
+                let sink = pointee.sinks[k].node
+                if sink.markDirty(direct: true) {
+                    for m in sink.pointee.sinks.indices {
+                        next.append(sink.pointee.sinks[m].node)
+                    }
                 }
             }
-        }
 
-        while let top = next.popLast() {
-            if top.markDirty(direct: false) {
-                for m in top.pointee.sinks.indices {
-                    next.append(top.pointee.sinks[m].node)
+            while let top = next.popLast() {
+                if top.markDirty(direct: false) {
+                    for m in top.pointee.sinks.indices {
+                        next.append(top.pointee.sinks[m].node)
+                    }
                 }
             }
         }
@@ -244,38 +244,44 @@ extension NodeRef {
         switch pointee.state {
         case .clean: return false
         case .dirty: return recompute()
-        case .maybe: break
+        case .maybe: return pullMaybe()
         }
+    }
 
+    @usableFromInline
+    @inline(never)
+    func pullMaybe() -> Bool {
         // frame: a `.maybe` node and the next of its sources to check
-        var stack: [(node: NodeRef, next: Int)] = [(self, 0)]
-        var changed = false
+        return withStackBuffer(of: (node: NodeRef, next: Int).self, capacity: 32) { stack in
+            stack.append((self, 0))
+            var changed = false
 
-        while let (node, next) = stack.last {
-            // a source changed (or marked us `.dirty` while recomputing): recompute
-            if changed || node.pointee.state == .dirty {
-                stack.removeLast()
-                changed = node.recompute()
-                continue
+            while let (node, next) = stack.last {
+                // a source changed (or marked us `.dirty` while recomputing): recompute
+                if changed || node.pointee.state == .dirty {
+                    stack.removeLast()
+                    changed = node.recompute()
+                    continue
+                }
+
+                // checked every source and none changed
+                if next >= node.pointee.sources.count {
+                    node.pointee.state = .clean
+                    stack.removeLast()
+                    continue
+                }
+
+                stack[stack.count - 1].next = next + 1
+                let source = node.pointee.sources[next].node
+                switch source.pointee.state {
+                case .clean: break  // unchanged, signals are always here
+                case .dirty: changed = source.recompute()
+                case .maybe: stack.append((source, 0))
+                }
             }
 
-            // checked every source and none changed
-            if next >= node.pointee.sources.count {
-                node.pointee.state = .clean
-                stack.removeLast()
-                continue
-            }
-
-            stack[stack.count - 1].next = next + 1
-            let source = node.pointee.sources[next].node
-            switch source.pointee.state {
-            case .clean: break  // unchanged, signals are always here
-            case .dirty: changed = source.recompute()
-            case .maybe: stack.append((source, 0))
-            }
+            return changed
         }
-
-        return changed
     }
 
     // state == .dirty or a source changed

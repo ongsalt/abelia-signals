@@ -11,8 +11,8 @@ extension Node {
 @usableFromInline
 enum ImmediateBatch {
     @inlinable
-    static var current: UnsafeMutablePointer<[Effect]>? {
-        get { abelia_tls_immediate_batch?.assumingMemoryBound(to: [Effect].self) }
+    static var current: UnsafeMutablePointer<StackBuffer<Effect>>? {
+        get { abelia_tls_immediate_batch?.assumingMemoryBound(to: StackBuffer<Effect>.self) }
         set { abelia_tls_immediate_batch = newValue.map { UnsafeMutableRawPointer($0) } }
     }
 }
