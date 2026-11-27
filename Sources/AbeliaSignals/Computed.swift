@@ -24,7 +24,7 @@ public final class Computed<T>: ReactiveNode {
     public convenience init(_ computation: @escaping () -> T, equals: ((T, T) -> Bool)? = nil) {
         // no `self` captures
         self.init(computation: computation, equals: equals) { wrapper in
-            unsafeDowncast(wrapper, to: Computed<T>.self).update()
+            unsafeDowncast(wrapper, to: Computed<T>.self).recompute()
         }
     }
 
@@ -32,21 +32,21 @@ public final class Computed<T>: ReactiveNode {
     init(
         computation: @escaping () -> T,
         equals: ((T, T) -> Bool)?,
-        update: @escaping (ReactiveNode) -> Bool
+        onRecompute: @escaping (ReactiveNode) -> Bool
     ) {
         self.computation = computation
         self.equals = equals
-        super.init(update: update)
+        super.init(onRecompute: onRecompute)
     }
 
     @inlinable
     func recomputeIfNeeded() {
-        // tell graph to pull, and graph decice to call update
+        // tell graph to pull, and graph decides to call onRecompute
         _ = node.pull()
     }
 
     @inlinable
-    func update() -> Bool {
+    func recompute() -> Bool {
         let newValue = node.withTracking(computation)
         if let old = _value, let equals, equals(old, newValue) { return false }
         _value = newValue
@@ -59,13 +59,13 @@ extension Computed where T: Equatable {
     public convenience init(_ computation: @escaping () -> T) {
         // the recompute thunk compares with an inline `==` instead of calling `equals`
         self.init(computation: computation, equals: ==) { wrapper in
-            unsafeDowncast(wrapper, to: Computed<T>.self).updateEquatable()
+            unsafeDowncast(wrapper, to: Computed<T>.self).recomputeEquatable()
         }
     }
 
-    // `update` with the default equality inlined
+    // `recompute` with the default equality inlined
     @inlinable
-    func updateEquatable() -> Bool {
+    func recomputeEquatable() -> Bool {
         let newValue = node.withTracking(computation)
         if let old = _value, old == newValue { return false }
         _value = newValue

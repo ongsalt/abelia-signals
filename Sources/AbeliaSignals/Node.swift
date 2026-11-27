@@ -13,7 +13,7 @@ struct Node {
 
     // behavior:
     //  - if self is .maybe, force deps recheck (effect)
-    //  - `update` callback for dirty computed, effect
+    //  - `onRecompute` callback for dirty computed, effect
     //  - effect owner is outside of the graph
     //      - default effect is just a node with eager update flag
     //      - immediate effect batching is also outside the graph
@@ -29,12 +29,12 @@ struct Node {
     var trackingIndex: Int = 0
 
     @usableFromInline
-    let update: (ReactiveNode) -> Bool
+    let onRecompute: (ReactiveNode) -> Bool
 
     @inlinable
-    init(isEffect: Bool, update: @escaping (ReactiveNode) -> Bool) {
+    init(isEffect: Bool, onRecompute: @escaping (ReactiveNode) -> Bool) {
         self.flags = isEffect ? [.dirty, .effect] : [.dirty]
-        self.update = update
+        self.onRecompute = onRecompute
     }
 
     // for computed/effect: clean = neither state bit set
@@ -282,7 +282,7 @@ extension NodeRef {
     @inlinable
     func recompute() -> Bool {
         let changed = owner._withUnsafeGuaranteedRef { s in
-            pointee.update(s)
+            pointee.onRecompute(s)
         }
 
         // we are clean now, so a sink pulling us later gets `false` back;

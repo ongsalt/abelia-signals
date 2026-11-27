@@ -6,7 +6,7 @@ public struct ComputedStorage<Root: AnyObject, T>: ~Copyable {
     @inlinable
     public init(equals: ((T, T) -> Bool)? = nil, _ computation: @escaping (Root) -> T) {
         self.storage = ComputedStorageNode(computation: computation, equals: equals) { wrapper in
-            unsafeDowncast(wrapper, to: ComputedStorageNode<Root, T>.self).update()
+            unsafeDowncast(wrapper, to: ComputedStorageNode<Root, T>.self).recompute()
         }
     }
 
@@ -51,8 +51,8 @@ extension ComputedStorage where T: Equatable {
     public init(_ computation: @escaping (Root) -> T) {
         // the recompute thunk compares with an inline `==` instead of calling `equals`
         self.init(
-            storage: ComputedStorageNode(computation: computation, equals: ==) { wrapper in
-                unsafeDowncast(wrapper, to: ComputedStorageNode<Root, T>.self).updateEquatable()
+            storage: ComputedStorageNode(computation: computation, equals: nil) { wrapper in
+                unsafeDowncast(wrapper, to: ComputedStorageNode<Root, T>.self).recomputeEquatable()
             }
         )
     }
@@ -90,11 +90,11 @@ final class ComputedStorageNode<Root: AnyObject, T>: ReactiveNode {
     init(
         computation: @escaping (Root) -> T,
         equals: ((T, T) -> Bool)?,
-        update: @escaping (ReactiveNode) -> Bool
+        onRecompute: @escaping (ReactiveNode) -> Bool
     ) {
         self.computation = computation
         self.equals = equals
-        super.init(update: update)
+        super.init(onRecompute: onRecompute)
     }
 
     @inlinable
@@ -113,7 +113,7 @@ final class ComputedStorageNode<Root: AnyObject, T>: ReactiveNode {
     }
 
     @inlinable
-    func update() -> Bool {
+    func recompute() -> Bool {
         guard let root = parent else { return false }
         let newValue = node.withTracking { computation(root) }
         if let old = _value, let equals, equals(old, newValue) { return false }
@@ -132,7 +132,7 @@ final class ComputedStorageNode<Root: AnyObject, T>: ReactiveNode {
 
 extension ComputedStorageNode where T: Equatable {
     @inlinable
-    func updateEquatable() -> Bool {
+    func recomputeEquatable() -> Bool {
         guard let root = parent else { return false }
         let newValue = node.withTracking { computation(root) }
         if let old = _value, old == newValue { return false }

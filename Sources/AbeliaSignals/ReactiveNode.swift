@@ -12,8 +12,8 @@ public class ReactiveNode {
     }
 
     @inlinable
-    init(isEffect: Bool = false, update: @escaping (ReactiveNode) -> Bool = { _ in true }) {
-        storage = Node(isEffect: isEffect, update: update)
+    init(isEffect: Bool = false, onRecompute: @escaping (ReactiveNode) -> Bool = { _ in true }) {
+        storage = Node(isEffect: isEffect, onRecompute: onRecompute)
         // the layout assumptions `node` and `NodeRef.owner` rely on
         assert(
             withUnsafeMutablePointer(to: &storage) { $0 } == node,
