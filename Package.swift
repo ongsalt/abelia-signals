@@ -1,5 +1,6 @@
 // swift-tools-version: 6.4
 
+import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
@@ -9,12 +10,27 @@ let package = Package(
     products: [
         .library(name: "AbeliaSignals", targets: ["AbeliaSignals"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "604.0.0"),
+    ],
     targets: [
         .target(name: "AbeliaSignalsTLS"),
 
+        .macro(
+            name: "AbeliaSignalsMacros",
+            dependencies: [
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+            ]
+        ),
+
         .target(
             name: "AbeliaSignals",
-            dependencies: ["AbeliaSignalsTLS"],
+            dependencies: [
+                "AbeliaSignalsTLS",
+                "AbeliaSignalsMacros",
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
                 .enableExperimentalFeature("Lifetimes"),

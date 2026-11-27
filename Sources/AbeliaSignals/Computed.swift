@@ -1,3 +1,4 @@
+@propertyWrapper
 public final class Computed<T>: ReactiveNode {
     @usableFromInline
     @exclusivity(unchecked)
@@ -18,6 +19,17 @@ public final class Computed<T>: ReactiveNode {
     public var peek: T {
         recomputeIfNeeded()
         return _value!
+    }
+
+    @inlinable
+    public var wrappedValue: T { value }
+
+    @inlinable
+    public convenience init(
+        wrappedValue: @escaping @autoclosure () -> T,
+        equals: ((T, T) -> Bool)? = nil
+    ) {
+        self.init(wrappedValue, equals: equals)
     }
 
     @inlinable
@@ -61,6 +73,11 @@ extension Computed where T: Equatable {
         self.init(computation: computation, equals: ==) { wrapper in
             unsafeDowncast(wrapper, to: Computed<T>.self).recomputeEquatable()
         }
+    }
+
+    @inlinable
+    public convenience init(wrappedValue: @escaping @autoclosure () -> T) {
+        self.init(wrappedValue)
     }
 
     // `recompute` with the default equality inlined
